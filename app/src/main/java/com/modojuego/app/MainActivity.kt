@@ -1,19 +1,25 @@
-
 package com.modojuego.app
 
-import android.content.pm.PackageManager
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import rikka.shizuku.Shizuku
 
 class MainActivity : AppCompatActivity() {
 
-    private val ffPackage = "com.dts.freefiremax"
     private lateinit var estado: TextView
+    private lateinit var textoStats: TextView
+    private lateinit var bMonitor: Button
+    private var monitoreando = false
+    private val botonesOpcion = mutableListOf<Pair<Button, Herramientas.Opcion>>()
 
     private val permListener =
         Shizuku.OnRequestPermissionResultListener { _, _ -> actualizarEstado() }
@@ -22,38 +28,74 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         Shizuku.addRequestPermissionResultListener(permListener)
 
-        val p = (24 * resources.displayMetrics.density).toInt()
-        val raiz = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(p, p, p, p)
+        if (Build.VERSION.SDK_INT >= 33) {
+            requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 2)
         }
 
-        estado = TextView(this).apply { textSize = 16f; gravity = Gravity.CENTER }
-        val bConectar = Button(this).apply {
-            text = "Conectar Shizuku"
-            setOnClickListener { pedirPermiso() }
-        }
-        val bJuego = Button(this).apply {
-            text = "MODO JUEGO"
-            setOnClickListener { modoJuego() }
-        }
-        val bRestaurar = Button(this).apply {
-            text = "Restaurar ajustes"
-            setOnClickListener { restaurar() }
+        val p = (20 * resources.displayMetrics.density).toInt()
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(p, p, p, p)
+
+        estado = TextView(this)
+        estado.textSize = 16f
+        estado.gravity = Gravity.CENTER
+        col.addView(estado)
+
+        col.addView(boton("Conectar Shizuku") { pedirPermiso() })
+        col.addView(boton("1. Permitir botón flotante") { pedirOverlay() })
+        col.addView(boton("2. Mostrar botón flotante") { mostrarFlotante() })
+        col.addView(boton("Ocultar botón flotante") {
+            stopService(Intent(this, FloatingService::class.java))
+        })
+
+        col.addView(boton("MODO JUEGO (limpia RAM + No molestar + abre el juego)") {
+            modoJuego()
+        })
+        col.addView(boton("Limpiar RAM") {
+            segundoPlano("RAM limpiada ✔") { Herramientas.limpiarRam() }
+        })
+        col.addView(boton("Borrar caché") {
+            segundoPlano("Caché borrada ✔") { Herramientas.borrarCache() }
+        })
+
+        for (o in Herramientas.opciones) {
+            val b = boton(etiqueta(o)) { }
+            b.setOnClickListener {
+                segundoPlano(null) {
+                    Herramientas.poner(this, o, !Herramientas.activa(this, o.id))
+                    runOnUiThread { b.text = etiqueta(o) }
+                }
+            }
+            botonesOpcion.add(Pair(b, o))
+            col.addView(b)
         }
 
-        raiz.addView(estado)
-        raiz.addView(bConectar)
-        raiz.addView(bJuego)
-        raiz.addView(bRestaurar)
-        setContentView(raiz)
+        bMonitor = boton("Ver FPS / CPU / RAM") { alternarMonitor() }
+        col.addView(bMonitor)
+
+        textoStats = TextView(this)
+        textoStats.textSize = 16f
+        textoStats.gravity = Gravity.CENTER
+        col.addView(textoStats)
+
+        col.addView(boton("Restaurar todo") { restaurar() })
+
+        val scroll = ScrollView(this)
+        scroll.addView(col)
+        setContentView(scroll)
         actualizarEstado()
     }
 
     override fun onResume() {
         super.onResume()
         actualizarEstado()
+        for ((b, o) in botonesOpcion) b.text = etiqueta(o)
+    }
+
+    override fun onPause() {
+        detenerMonitor()
+        super.onPause()
     }
 
     override fun onDestroy() {
@@ -61,15 +103,22 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun listo(): Boolean = try {
-        Shizuku.pingBinder() &&
-            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-    } catch (e: Throwable) {
-        false
+    private fun boton(t: String, accion: () -> Unit): Button {
+        val b = Button(this)
+        b.text = t
+        b.isAllCaps = false
+        b.setOnClickListener { accion() }
+        return b
     }
 
+    private fun etiqueta(o: Herramientas.Opcion): String =
+        (if (Herramientas.activa(this, o.id)) "✔ " else "✖ ") + o.nombre
+
     private fun actualizarEstado() {
-        estado.text = if (listo()) "Shizuku conectado ✔" else "Shizuku no conectado"
+        val s = if (Herramientas.listo()) "Shizuku conectado ✔" else "Shizuku no conectado"
+        val f = if (Settings.canDrawOverlays(this)) "Botón flotante: permiso OK ✔"
+        else "Botón flotante: falta permiso"
+        estado.text = s + "\n" + f
     }
 
     private fun pedirPermiso() {
@@ -84,51 +133,93 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun ejecutar(cmd: String) {
+    private fun pedirOverlay() {
+        if (Settings.canDrawOverlays(this)) {
+            estado.text = "El permiso ya está concedido ✔"
+            return
+        }
+        startActivity(
+            Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+        )
+    }
+
+    private fun mostrarFlotante() {
+        if (!Settings.canDrawOverlays(this)) {
+            estado.text = "Primero tocá: Permitir botón flotante"
+            return
+        }
+        startForegroundService(Intent(this, FloatingService::class.java))
+    }
+
+    private fun segundoPlano(mensaje: String?, accion: () -> Unit) {
+        if (!Herramientas.listo()) {
+            estado.text = "Primero tocá Conectar Shizuku"
+            return
+        }
         Thread {
-            try {
-                val m = Shizuku::class.java.getDeclaredMethod(
-                    "newProcess",
-                    Array<String>::class.java,
-                    Array<String>::class.java,
-                    String::class.java
-                )
-                m.isAccessible = true
-                val proc = m.invoke(null, arrayOf("sh", "-c", cmd), null, null) as Process
-                proc.waitFor()
-            } catch (e: Throwable) {
-                runOnUiThread { estado.text = "Error al ejecutar" }
-            }
+            accion()
+            if (mensaje != null) runOnUiThread { estado.text = mensaje }
         }.start()
     }
 
     private fun modoJuego() {
-        if (!listo()) {
+        if (!Herramientas.listo()) {
             estado.text = "Primero tocá Conectar Shizuku"
             return
         }
-        ejecutar(
-            "am kill-all; " +
-                "cmd notification set_dnd priority; " +
-                "settings put global window_animation_scale 0.5; " +
-                "settings put global transition_animation_scale 0.5; " +
-                "settings put global animator_duration_scale 0.5"
-        )
-        estado.text = "Modo juego activado ✔"
-        packageManager.getLaunchIntentForPackage(ffPackage)?.let { startActivity(it) }
+        Thread {
+            Herramientas.limpiarRam()
+            Herramientas.poner(this, Herramientas.opciones.first { it.id == "dnd" }, true)
+            runOnUiThread {
+                estado.text = "Modo juego activado ✔"
+                for ((b, o) in botonesOpcion) b.text = etiqueta(o)
+                packageManager.getLaunchIntentForPackage(Herramientas.JUEGO)?.let {
+                    startActivity(it)
+                }
+            }
+        }.start()
     }
 
     private fun restaurar() {
-        if (!listo()) {
+        if (!Herramientas.listo()) {
             estado.text = "Primero tocá Conectar Shizuku"
             return
         }
-        ejecutar(
-            "cmd notification set_dnd off; " +
-                "settings put global window_animation_scale 1.0; " +
-                "settings put global transition_animation_scale 1.0; " +
-                "settings put global animator_duration_scale 1.0"
-        )
-        estado.text = "Ajustes restaurados ✔"
+        Thread {
+            Herramientas.restaurarTodo(this)
+            runOnUiThread {
+                estado.text = "Todo restaurado ✔"
+                for ((b, o) in botonesOpcion) b.text = etiqueta(o)
+            }
+        }.start()
+    }
+
+    private fun alternarMonitor() {
+        if (monitoreando) {
+            detenerMonitor()
+            return
+        }
+        if (!Herramientas.listo()) {
+            estado.text = "Primero tocá Conectar Shizuku"
+            return
+        }
+        monitoreando = true
+        bMonitor.text = "Detener monitor"
+        Thread {
+            while (monitoreando) {
+                val s = Herramientas.estadisticas(this)
+                runOnUiThread { textoStats.text = s.texto() }
+                Thread.sleep(1000)
+            }
+        }.start()
+    }
+
+    private fun detenerMonitor() {
+        monitoreando = false
+        bMonitor.text = "Ver FPS / CPU / RAM"
+        textoStats.text = ""
     }
 }

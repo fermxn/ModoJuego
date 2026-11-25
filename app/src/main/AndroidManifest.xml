@@ -12,6 +12,8 @@
 
     <application
         android:label="Modo Juego"
+        android:icon="@mipmap/icono"
+        android:roundIcon="@mipmap/icono"
         android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
 
         <provider

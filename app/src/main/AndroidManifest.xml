@@ -11,7 +11,7 @@
     </queries>
 
     <application
-        android:label="Modo Juego"
+        android:label="FERMXN THE GOAT GAME V1"
         android:icon="@mipmap/icono"
         android:roundIcon="@mipmap/icono"
         android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">

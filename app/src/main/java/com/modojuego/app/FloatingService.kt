@@ -21,6 +21,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 
@@ -30,13 +31,17 @@ class FloatingService : Service() {
     private lateinit var burbuja: TextView
     private lateinit var panel: ScrollView
     private lateinit var textoStats: TextView
+    private lateinit var mira: MiraView
     private lateinit var pBurbuja: WindowManager.LayoutParams
     private lateinit var pPanel: WindowManager.LayoutParams
+    private lateinit var pMira: WindowManager.LayoutParams
 
     private val ui = Handler(Looper.getMainLooper())
+    private val prefs by lazy { getSharedPreferences("modojuego", MODE_PRIVATE) }
     private var creado = false
     private var panelAbierto = false
     private var monitoreando = false
+    private var miraVisible = false
     private var hijos = 0
 
     private val tipo = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -54,6 +59,7 @@ class FloatingService : Service() {
             creado = true
             wm = getSystemService(WINDOW_SERVICE) as WindowManager
             crearBurbuja()
+            crearMira()
             crearPanel()
         }
         return START_NOT_STICKY
@@ -62,6 +68,7 @@ class FloatingService : Service() {
     override fun onDestroy() {
         monitoreando = false
         try { if (panelAbierto) wm.removeView(panel) } catch (e: Throwable) { }
+        try { if (miraVisible) wm.removeView(mira) } catch (e: Throwable) { }
         try { wm.removeView(burbuja) } catch (e: Throwable) { }
         super.onDestroy()
     }
@@ -94,6 +101,9 @@ class FloatingService : Service() {
 
     private fun etiqueta(o: Herramientas.Opcion): String =
         (if (Herramientas.activa(this, o.id)) "✔ " else "✖ ") + o.nombre
+
+    private fun etiquetaMira(): String =
+        (if (miraVisible) "✔ " else "✖ ") + "Aim head disimulado"
 
     private fun fondo(color: Int, radio: Int): GradientDrawable =
         GradientDrawable().apply {
@@ -177,6 +187,36 @@ class FloatingService : Service() {
         wm.addView(burbuja, pBurbuja)
     }
 
+    private fun crearMira() {
+        mira = MiraView(this)
+        mira.diseno = prefs.getInt("mira_diseno", 0)
+        val px = dp(prefs.getInt("mira_tam", 80))
+        val banderasMira = banderas or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        pMira = WindowManager.LayoutParams(px, px, tipo, banderasMira, PixelFormat.TRANSLUCENT)
+        pMira.gravity = Gravity.CENTER
+    }
+
+    private fun aplicarTamanoMira() {
+        val px = dp(prefs.getInt("mira_tam", 80))
+        pMira.width = px
+        pMira.height = px
+        if (miraVisible) wm.updateViewLayout(mira, pMira)
+    }
+
+    private fun mostrarMira(mostrar: Boolean) {
+        if (mostrar == miraVisible) return
+        if (mostrar) {
+            aplicarTamanoMira()
+            wm.addView(mira, pMira)
+        } else {
+            wm.removeView(mira)
+        }
+        miraVisible = mostrar
+    }
+
     private fun crearPanel() {
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
@@ -189,6 +229,48 @@ class FloatingService : Service() {
         titulo.gravity = Gravity.CENTER
         col.addView(titulo)
 
+        // ----- Mira -----
+        val bMira = boton(etiquetaMira()) { }
+        bMira.setOnClickListener {
+            mostrarMira(!miraVisible)
+            bMira.text = etiquetaMira()
+        }
+        col.addView(bMira)
+
+        val bDiseno = boton("Diseño: " + MiraView.NOMBRES[mira.diseno]) { }
+        bDiseno.setOnClickListener {
+            val n = (mira.diseno + 1) % MiraView.NOMBRES.size
+            mira.diseno = n
+            prefs.edit().putInt("mira_diseno", n).apply()
+            bDiseno.text = "Diseño: " + MiraView.NOMBRES[n]
+        }
+        col.addView(bDiseno)
+
+        val tamActual = prefs.getInt("mira_tam", 80)
+        val etiquetaTam = TextView(this)
+        etiquetaTam.text = "Tamaño de la mira: $tamActual"
+        etiquetaTam.setTextColor(Color.WHITE)
+        etiquetaTam.textSize = 13f
+        etiquetaTam.setPadding(0, dp(6), 0, 0)
+        col.addView(etiquetaTam)
+
+        val barra = SeekBar(this)
+        barra.max = 176
+        barra.progress = tamActual - 24
+        barra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, progreso: Int, usuario: Boolean) {
+                val tam = 24 + progreso
+                prefs.edit().putInt("mira_tam", tam).apply()
+                etiquetaTam.text = "Tamaño de la mira: $tam"
+                aplicarTamanoMira()
+            }
+
+            override fun onStartTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {}
+        })
+        col.addView(barra)
+
+        // ----- Herramientas -----
         col.addView(boton("Limpiar RAM") {
             segundoPlano {
                 Herramientas.limpiarRam()
@@ -214,6 +296,7 @@ class FloatingService : Service() {
             col.addView(b)
         }
 
+        // ----- Monitor -----
         val bMon = boton("Mostrar FPS / CPU / RAM") { }
         bMon.setOnClickListener {
             if (monitoreando) {

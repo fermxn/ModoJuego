@@ -127,7 +127,7 @@ class FloatingService : Service() {
     private fun nombreColor(): String =
         MiraView.COLORES_NOMBRES[mira.colorIndice.coerceIn(0, MiraView.COLORES_NOMBRES.size - 1)]
 
-    // ---------- Sensibilidad de la pantalla (frecuencia de refresco) ----------
+    // ---------- Tasa de fotogramas (frecuencia de refresco) ----------
 
     @Suppress("DEPRECATION")
     private fun hzMaximo(): Float {
@@ -163,11 +163,11 @@ class FloatingService : Service() {
             if (nivel == 2 && ahora < maxHz - 1f) {
                 aviso("Tu celular ignoró el ajuste: la pantalla sigue en $ahoraTxt")
             } else if (nivel == 0) {
-                aviso("Sensibilidad $nombre ✔ (automático, ahora $ahoraTxt)")
+                aviso("Tasa de fotogramas $nombre ✔ (automático, ahora $ahoraTxt)")
             } else if (nivel == 1) {
-                aviso("Sensibilidad $nombre ✔ (hasta $maxTxt, ahora $ahoraTxt)")
+                aviso("Tasa de fotogramas $nombre ✔ (hasta $maxTxt, ahora $ahoraTxt)")
             } else {
-                aviso("Sensibilidad $nombre ✔ (pantalla fija en $ahoraTxt)")
+                aviso("Tasa de fotogramas $nombre ✔ (pantalla fija en $ahoraTxt)")
             }
         }
     }
@@ -588,7 +588,7 @@ class FloatingService : Service() {
         val nivelSens = prefs.getInt("sens_nivel", 0).coerceIn(0, 2)
         pgHerr.addView(
             tarjetaNiveles(
-                "Sensibilidad de la pantalla",
+                "Tasa de fotogramas",
                 nombresSens,
                 nivelSens,
                 "Sube la frecuencia de pantalla para una respuesta táctil más rápida. " +

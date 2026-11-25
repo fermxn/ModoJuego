@@ -100,10 +100,10 @@ class FloatingService : Service() {
     }
 
     private fun etiqueta(o: Herramientas.Opcion): String =
-        (if (Herramientas.activa(this, o.id)) "✔ " else "✖ ") + o.nombre
+        (if (Herramientas.activa(this, o.id)) "✅" else "❌") + o.nombre
 
     private fun etiquetaMira(): String =
-        (if (miraVisible) "✅ " else "❌") + "Aim head disimulado"
+        (if (miraVisible) "❌ " else "✅") + "Aim head disimulado"
 
     private fun fondo(color: Int, radio: Int): GradientDrawable =
         GradientDrawable().apply {

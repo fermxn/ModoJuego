@@ -102,6 +102,11 @@ class FloatingService : Service() {
     private fun etiquetaMira(): String =
         (if (miraVisible) "✔ " else "✖ ") + "Aim head disimulado"
 
+    private fun textoColor(): String =
+        "Color: " + MiraView.COLORES_NOMBRES[
+            mira.colorIndice.coerceIn(0, MiraView.COLORES_NOMBRES.size - 1)
+        ]
+
     private fun fondo(color: Int, radio: Int): GradientDrawable =
         GradientDrawable().apply {
             setColor(color)
@@ -187,6 +192,7 @@ class FloatingService : Service() {
     private fun crearMira() {
         mira = MiraView(this)
         mira.diseno = prefs.getInt("mira_diseno", 0)
+        mira.colorIndice = prefs.getInt("mira_color", 0)
         val px = dp(prefs.getInt("mira_tam", 80))
         val banderasMira = banderas or
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -243,7 +249,16 @@ class FloatingService : Service() {
         }
         col.addView(bDiseno)
 
-        val tamActual = prefs.getInt("mira_tam", 80)
+        val bColor = boton(textoColor()) { }
+        bColor.setOnClickListener {
+            val n = (mira.colorIndice + 1) % MiraView.COLORES.size
+            mira.colorIndice = n
+            prefs.edit().putInt("mira_color", n).apply()
+            bColor.text = textoColor()
+        }
+        col.addView(bColor)
+
+        val tamActual = prefs.getInt("mira_tam", 80).coerceIn(24, 1000)
         val etiquetaTam = TextView(this)
         etiquetaTam.text = "Tamaño de la mira: $tamActual"
         etiquetaTam.setTextColor(Color.WHITE)
@@ -252,7 +267,7 @@ class FloatingService : Service() {
         col.addView(etiquetaTam)
 
         val barra = SeekBar(this)
-        barra.max = 176
+        barra.max = 976
         barra.progress = tamActual - 24
         barra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, progreso: Int, usuario: Boolean) {
@@ -362,8 +377,4 @@ class FloatingService : Service() {
 
     private fun detenerMonitor() {
         monitoreando = false
-        textoStats.visibility = View.GONE
-        burbuja.textSize = 22f
-        burbuja.text = "⚡"
-    }
-}
+        textoStat

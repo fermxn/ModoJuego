@@ -4,10 +4,13 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.pm.PackageManager
 import rikka.shizuku.Shizuku
+import java.util.Locale
 
 object Herramientas {
 
-    const val JUEGO = "com.dts.freefiremax"
+    const val FF_MAX = "com.dts.freefiremax"
+    const val FF_NORMAL = "com.dts.freefireth"
+    const val JUEGO = FF_MAX
 
     class Opcion(val id: String, val nombre: String, val on: String, val off: String)
 
@@ -62,6 +65,12 @@ object Herramientas {
     private fun prefs(c: Context) =
         c.getSharedPreferences("modojuego", Context.MODE_PRIVATE)
 
+    fun juego(c: Context): String = prefs(c).getString("juego", FF_MAX) ?: FF_MAX
+
+    fun elegirJuego(c: Context, paquete: String) {
+        prefs(c).edit().putString("juego", paquete).apply()
+    }
+
     fun activa(c: Context, id: String): Boolean = prefs(c).getBoolean(id, false)
 
     fun poner(c: Context, o: Opcion, activar: Boolean) {
@@ -97,6 +106,17 @@ object Herramientas {
         return "RAM libre: $libre / $total MB"
     }
 
+    fun ramUso(c: Context): Pair<Int, String> {
+        val am = c.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val mi = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(mi)
+        val usada = mi.totalMem - mi.availMem
+        val pct = (100 * usada / mi.totalMem).toInt()
+        val gbUsada = usada / 1073741824.0
+        val gbTotal = mi.totalMem / 1073741824.0
+        return Pair(pct, String.format(Locale.US, "%.1f / %.1f GB", gbUsada, gbTotal))
+    }
+
     private var cpuTotalAnt = 0L
     private var cpuIdleAnt = 0L
 
@@ -116,12 +136,17 @@ object Herramientas {
     }
 
     private var capa: String? = null
+    private var capaPaquete = ""
 
-    fun fps(): Int {
+    fun fps(paquete: String): Int {
+        if (paquete != capaPaquete) {
+            capa = null
+            capaPaquete = paquete
+        }
         if (capa == null) {
             val lista = sh("dumpsys SurfaceFlinger --list").lines()
-            capa = lista.firstOrNull { it.contains(JUEGO) && it.contains("SurfaceView") }
-                ?: lista.firstOrNull { it.contains(JUEGO) }
+            capa = lista.firstOrNull { it.contains(paquete) && it.contains("SurfaceView") }
+                ?: lista.firstOrNull { it.contains(paquete) }
         }
         val nombre = capa ?: return -1
         val lineas = sh("dumpsys SurfaceFlinger --latency '$nombre'").lines()
@@ -137,5 +162,5 @@ object Herramientas {
         return tiempos.count { it > ultimo - 1_000_000_000L }
     }
 
-    fun estadisticas(c: Context): Stats = Stats(fps(), cpuPorcentaje(), ramTexto(c))
+    fun estadisticas(c: Context): Stats = Stats(fps(juego(c)), cpuPorcentaje(), ramTexto(c))
 }

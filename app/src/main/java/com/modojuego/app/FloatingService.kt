@@ -44,6 +44,15 @@ class FloatingService : Service() {
     private var miraVisible = false
     private var hijos = 0
 
+    private val opAimlock = Herramientas.Opcion(
+        "aimlock",
+        "aimlock",
+        "settings put secure long_press_timeout 250; " +
+            "settings put system high_touch_sensitivity_enable 1",
+        "settings put secure long_press_timeout 400; " +
+            "settings put system high_touch_sensitivity_enable 0"
+    )
+
     private val tipo = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
     private val banderas = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
 
@@ -101,6 +110,9 @@ class FloatingService : Service() {
 
     private fun etiquetaMira(): String =
         (if (miraVisible) "✔ " else "✖ ") + "Aim head disimulado"
+
+    private fun etiquetaAim(): String =
+        (if (Herramientas.activa(this, opAimlock.id)) "✔ " else "✖ ") + "aimlock"
 
     private fun textoColor(): String =
         "Color: " + MiraView.COLORES_NOMBRES[
@@ -281,6 +293,18 @@ class FloatingService : Service() {
             override fun onStopTrackingTouch(s: SeekBar) {}
         })
         col.addView(barra)
+
+        // ----- aimlock (sensibilidad táctil) -----
+        val bAim = boton(etiquetaAim()) { }
+        bAim.setOnClickListener {
+            segundoPlano {
+                val nuevo = !Herramientas.activa(this, opAimlock.id)
+                Herramientas.poner(this, opAimlock, nuevo)
+                ui.post { bAim.text = etiquetaAim() }
+                aviso(if (nuevo) "aimlock activado ✔" else "aimlock desactivado")
+            }
+        }
+        col.addView(bAim)
 
         // ----- Herramientas -----
         col.addView(boton("Limpiar RAM") {

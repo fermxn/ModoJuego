@@ -103,7 +103,7 @@ class FloatingService : Service() {
         (if (Herramientas.activa(this, o.id)) "✔ " else "✖ ") + o.nombre
 
     private fun etiquetaMira(): String =
-        (if (miraVisible) "✔ " else "✖ ") + "Aim head disimulado"
+        (if (miraVisible) "✅ " else "❌") + "Aim head disimulado"
 
     private fun fondo(color: Int, radio: Int): GradientDrawable =
         GradientDrawable().apply {
@@ -132,7 +132,7 @@ class FloatingService : Service() {
 
     private fun crearBurbuja() {
         burbuja = TextView(this)
-        burbuja.text = "⚡"
+        burbuja.text = "👹"
         burbuja.textSize = 22f
         burbuja.setTextColor(Color.WHITE)
         burbuja.gravity = Gravity.CENTER
@@ -379,6 +379,6 @@ class FloatingService : Service() {
         monitoreando = false
         textoStats.visibility = View.GONE
         burbuja.textSize = 22f
-        burbuja.text = "⚡"
+        burbuja.text = "👹"
     }
 }

@@ -24,6 +24,7 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import java.util.Locale
 
 class FloatingService : Service() {
 
@@ -44,6 +45,7 @@ class FloatingService : Service() {
     private val tabs = mutableListOf<TextView>()
     private val paginas = mutableListOf<LinearLayout>()
     private val titulos = listOf("Monitor", "Mira", "Herramientas", "Ajustes")
+    private val nombresSens = listOf("Normal", "Medio alto", "Alto")
 
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("modojuego", MODE_PRIVATE) }
@@ -124,6 +126,51 @@ class FloatingService : Service() {
 
     private fun nombreColor(): String =
         MiraView.COLORES_NOMBRES[mira.colorIndice.coerceIn(0, MiraView.COLORES_NOMBRES.size - 1)]
+
+    // ---------- Sensibilidad de la pantalla (frecuencia de refresco) ----------
+
+    @Suppress("DEPRECATION")
+    private fun hzMaximo(): Float {
+        var m = 60f
+        for (modo in wm.defaultDisplay.supportedModes) {
+            if (modo.refreshRate > m) m = modo.refreshRate
+        }
+        return m
+    }
+
+    @Suppress("DEPRECATION")
+    private fun hzActual(): Float = wm.defaultDisplay.refreshRate
+
+    private fun aplicarSensibilidad(nivel: Int) {
+        segundoPlano {
+            prefs.edit().putInt("sens_nivel", nivel).apply()
+            val maxHz = hzMaximo()
+            val max = String.format(Locale.US, "%.1f", maxHz)
+            val comando = when (nivel) {
+                0 -> "settings delete system min_refresh_rate; " +
+                    "settings delete system peak_refresh_rate"
+                1 -> "settings put system min_refresh_rate 60.0; " +
+                    "settings put system peak_refresh_rate $max"
+                else -> "settings put system min_refresh_rate $max; " +
+                    "settings put system peak_refresh_rate $max"
+            }
+            Herramientas.sh(comando)
+            Thread.sleep(1500)
+            val ahora = hzActual()
+            val ahoraTxt = String.format(Locale.US, "%.0f Hz", ahora)
+            val maxTxt = String.format(Locale.US, "%.0f Hz", maxHz)
+            val nombre = nombresSens[nivel]
+            if (nivel == 2 && ahora < maxHz - 1f) {
+                aviso("Tu celular ignoró el ajuste: la pantalla sigue en $ahoraTxt")
+            } else if (nivel == 0) {
+                aviso("Sensibilidad $nombre ✔ (automático, ahora $ahoraTxt)")
+            } else if (nivel == 1) {
+                aviso("Sensibilidad $nombre ✔ (hasta $maxTxt, ahora $ahoraTxt)")
+            } else {
+                aviso("Sensibilidad $nombre ✔ (pantalla fija en $ahoraTxt)")
+            }
+        }
+    }
 
     // ---------- Burbuja ----------
 
@@ -350,6 +397,62 @@ class FloatingService : Service() {
         return c
     }
 
+    private fun tarjetaNiveles(
+        titulo: String,
+        nombres: List<String>,
+        inicial: Int,
+        pista: String,
+        alSoltar: (Int) -> Unit
+    ): LinearLayout {
+        val c = LinearLayout(this)
+        c.orientation = LinearLayout.VERTICAL
+        c.setPadding(dp(16), dp(12), dp(16), dp(10))
+        c.background = pildora(22)
+
+        val arriba = LinearLayout(this)
+        arriba.orientation = LinearLayout.HORIZONTAL
+        val t = TextView(this)
+        t.text = titulo
+        t.setTextColor(Color.WHITE)
+        t.textSize = 15f
+        arriba.addView(t, LinearLayout.LayoutParams(0, WRAP, 1f))
+        val v = TextView(this)
+        v.text = nombres[inicial]
+        v.setTextColor(Color.WHITE)
+        v.textSize = 15f
+        arriba.addView(v)
+        c.addView(arriba)
+
+        val barra = SeekBar(this)
+        barra.max = nombres.size - 1
+        barra.progress = inicial
+        barra.progressTintList = ColorStateList.valueOf(azul)
+        barra.thumbTintList = ColorStateList.valueOf(Color.WHITE)
+        barra.progressBackgroundTintList =
+            ColorStateList.valueOf(Color.parseColor("#66FFFFFF"))
+        barra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, progreso: Int, usuario: Boolean) {
+                v.text = nombres[progreso]
+            }
+
+            override fun onStartTrackingTouch(s: SeekBar) {}
+
+            override fun onStopTrackingTouch(s: SeekBar) {
+                alSoltar(s.progress)
+            }
+        })
+        c.addView(barra)
+
+        val p = TextView(this)
+        p.text = pista
+        p.setTextColor(Color.parseColor("#CCFFFFFF"))
+        p.textSize = 12f
+        c.addView(p)
+
+        c.layoutParams = paramsFila()
+        return c
+    }
+
     private fun pagina(): LinearLayout {
         val p = LinearLayout(this)
         p.orientation = LinearLayout.VERTICAL
@@ -482,6 +585,16 @@ class FloatingService : Service() {
 
         // ----- Página 2: Herramientas -----
         val pgHerr = pagina()
+        val nivelSens = prefs.getInt("sens_nivel", 0).coerceIn(0, 2)
+        pgHerr.addView(
+            tarjetaNiveles(
+                "Sensibilidad de la pantalla",
+                nombresSens,
+                nivelSens,
+                "Sube la frecuencia de pantalla para una respuesta táctil más rápida. " +
+                    "Al soltar te muestro los Hz reales."
+            ) { n -> aplicarSensibilidad(n) }
+        )
         val indAim = indicador(Herramientas.activa(this, opAimlock.id))
         pgHerr.addView(fila("aimlock", indAim) {
             segundoPlano {

@@ -377,4 +377,8 @@ class FloatingService : Service() {
 
     private fun detenerMonitor() {
         monitoreando = false
-        textoStat
+        textoStats.visibility = View.GONE
+        burbuja.textSize = 22f
+        burbuja.text = "⚡"
+    }
+}

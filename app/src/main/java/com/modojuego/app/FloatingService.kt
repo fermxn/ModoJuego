@@ -5,11 +5,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -28,45 +31,57 @@ import java.util.Locale
 
 class FloatingService : Service() {
 
+    private class Tile(val vista: LinearLayout, val estado: TextView)
+
     private lateinit var wm: WindowManager
     private lateinit var burbuja: TextView
     private lateinit var panel: LinearLayout
-    private lateinit var panelFondo: GradientDrawable
-    private lateinit var scrollContenido: ScrollView
-    private lateinit var tituloTab: TextView
-    private lateinit var bLuna: TextView
-    private lateinit var bSol: TextView
-    private lateinit var textoStats: TextView
+    private lateinit var hud: TextView
+    private lateinit var seccionMira: LinearLayout
+    private lateinit var chipFps: TextView
+    private lateinit var chipRam: TextView
+    private lateinit var chipTemp: TextView
+    private lateinit var tileDnd: Tile
+    private lateinit var tileHud: Tile
+    private lateinit var tileGuide: Tile
+    private lateinit var tileMiraSet: Tile
+    private lateinit var tileTouch: Tile
+    private lateinit var tilePerfil: Tile
+    private lateinit var tilePing: Tile
+    private lateinit var tileHealth: Tile
     private lateinit var mira: MiraView
     private lateinit var pBurbuja: WindowManager.LayoutParams
     private lateinit var pPanel: WindowManager.LayoutParams
     private lateinit var pMira: WindowManager.LayoutParams
+    private lateinit var pHud: WindowManager.LayoutParams
 
-    private val tabs = mutableListOf<TextView>()
-    private val paginas = mutableListOf<LinearLayout>()
-    private val titulos = listOf("Monitor", "Mira", "Herramientas", "Ajustes")
-    private val nombresSens = listOf("Normal", "Medio alto", "Alto")
+    private val botonesModo = mutableListOf<LinearLayout>()
+    private val nombresModo = listOf("LOW POWER", "BALANCE", "PERFORMANCE", "EXTREME")
 
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("modojuego", MODE_PRIVATE) }
     private var creado = false
     private var panelAbierto = false
-    private var monitoreando = false
     private var miraVisible = false
-    private var tema = 0
+    private var hudActivo = false
+    private var ciclo = 0
+    private var ultimoPing = -1
+
+    @Volatile
+    private var corriendo = false
 
     private val MATCH = LinearLayout.LayoutParams.MATCH_PARENT
     private val WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
-    private val azul = Color.parseColor("#8EA0F5")
-    private val azulSuave = Color.parseColor("#B38EA0F5")
+    private val cian = Color.parseColor("#19C6F0")
+    private val verde = Color.parseColor("#5CF2A0")
+    private val rojo = Color.parseColor("#FF4D5E")
+    private val fondoTile = Color.parseColor("#0F1A2E")
 
-    private val opAimlock = Herramientas.Opcion(
-        "aimlock",
-        "aimlock",
-        "settings put secure long_press_timeout 250; " +
-            "settings put system high_touch_sensitivity_enable 1",
-        "settings put secure long_press_timeout 400; " +
-            "settings put system high_touch_sensitivity_enable 0"
+    private val opTouch = Herramientas.Opcion(
+        "show_touches",
+        "TOUCH",
+        "settings put system show_touches 1",
+        "settings put system show_touches 0"
     )
 
     private val tipo = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -85,15 +100,17 @@ class FloatingService : Service() {
             wm = getSystemService(WINDOW_SERVICE) as WindowManager
             crearBurbuja()
             crearMira()
+            crearHud()
             crearPanel()
         }
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        monitoreando = false
+        hudActivo = false
         try { if (panelAbierto) wm.removeView(panel) } catch (e: Throwable) { }
         try { if (miraVisible) wm.removeView(mira) } catch (e: Throwable) { }
+        try { wm.removeView(hud) } catch (e: Throwable) { }
         try { wm.removeView(burbuja) } catch (e: Throwable) { }
         super.onDestroy()
     }
@@ -109,6 +126,8 @@ class FloatingService : Service() {
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .build()
     }
+
+    // ---------- Utilidades ----------
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
@@ -127,7 +146,8 @@ class FloatingService : Service() {
     private fun nombreColor(): String =
         MiraView.COLORES_NOMBRES[mira.colorIndice.coerceIn(0, MiraView.COLORES_NOMBRES.size - 1)]
 
-    // ---------- Tasa de fotogramas (frecuencia de refresco) ----------
+    private fun nombrePerfil(): String =
+        if (Herramientas.juego(this) == Herramientas.FF_MAX) "MAX" else "FF"
 
     @Suppress("DEPRECATION")
     private fun hzMaximo(): Float {
@@ -141,34 +161,93 @@ class FloatingService : Service() {
     @Suppress("DEPRECATION")
     private fun hzActual(): Float = wm.defaultDisplay.refreshRate
 
-    private fun aplicarSensibilidad(nivel: Int) {
-        segundoPlano {
-            prefs.edit().putInt("sens_nivel", nivel).apply()
+    private fun bateria(): Intent? =
+        registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+
+    private fun tempBateria(): Float {
+        val t = bateria()?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
+        return if (t > 0) t / 10f else -1f
+    }
+
+    private fun medirPing(): Int {
+        val salida = Herramientas.sh("ping -c 1 -W 1 8.8.8.8")
+        val m = Regex("time=([0-9.]+)").find(salida) ?: return -1
+        return m.groupValues[1].toFloatOrNull()?.toInt() ?: -1
+    }
+
+    private fun resumenBateria() {
+        val i = bateria()
+        if (i == null) {
+            aviso("No pude leer la batería")
+            return
+        }
+        val nivel = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val escala = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+        val pct = if (nivel >= 0 && escala > 0) nivel * 100 / escala else -1
+        val salud = when (i.getIntExtra(BatteryManager.EXTRA_HEALTH, 1)) {
+            BatteryManager.BATTERY_HEALTH_GOOD -> "buena"
+            BatteryManager.BATTERY_HEALTH_OVERHEAT -> "sobrecalentada"
+            BatteryManager.BATTERY_HEALTH_COLD -> "fría"
+            BatteryManager.BATTERY_HEALTH_DEAD -> "dañada"
+            BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "sobretensión"
+            else -> "desconocida"
+        }
+        val t = tempBateria()
+        val tTxt = if (t > 0) String.format(Locale.US, "%.1f°C", t) else "--"
+        aviso("Batería $pct% · $tTxt · salud $salud")
+    }
+
+    // ---------- Modos (frecuencia de pantalla) ----------
+
+    private fun aplicarModo(modo: Int) {
+        if (!Herramientas.listo()) {
+            aviso("Conectá Shizuku primero")
+            return
+        }
+        prefs.edit().putInt("modo", modo).apply()
+        pintarModos(modo)
+        Thread {
             val maxHz = hzMaximo()
             val max = String.format(Locale.US, "%.1f", maxHz)
-            val comando = when (nivel) {
-                0 -> "settings delete system min_refresh_rate; " +
+            val comando = when (modo) {
+                0 -> "settings put system min_refresh_rate 60.0; " +
+                    "settings put system peak_refresh_rate 60.0"
+                1 -> "settings delete system min_refresh_rate; " +
                     "settings delete system peak_refresh_rate"
-                1 -> "settings put system min_refresh_rate 60.0; " +
-                    "settings put system peak_refresh_rate $max"
                 else -> "settings put system min_refresh_rate $max; " +
                     "settings put system peak_refresh_rate $max"
             }
             Herramientas.sh(comando)
+            if (modo == 3) {
+                Herramientas.limpiarRam()
+                val dnd = Herramientas.opciones.first { it.id == "dnd" }
+                Herramientas.poner(this, dnd, true)
+                ui.post { marcar(tileDnd, true, "ON") }
+            }
             Thread.sleep(1500)
             val ahora = hzActual()
             val ahoraTxt = String.format(Locale.US, "%.0f Hz", ahora)
-            val maxTxt = String.format(Locale.US, "%.0f Hz", maxHz)
-            val nombre = nombresSens[nivel]
-            if (nivel == 2 && ahora < maxHz - 1f) {
+            val ignorado = (modo >= 2 && ahora < maxHz - 1f) || (modo == 0 && ahora > 61f)
+            if (ignorado) {
                 aviso("Tu celular ignoró el ajuste: la pantalla sigue en $ahoraTxt")
-            } else if (nivel == 0) {
-                aviso("Tasa de fotogramas $nombre ✔ (automático, ahora $ahoraTxt)")
-            } else if (nivel == 1) {
-                aviso("Tasa de fotogramas $nombre ✔ (hasta $maxTxt, ahora $ahoraTxt)")
             } else {
-                aviso("Tasa de fotogramas $nombre ✔ (pantalla fija en $ahoraTxt)")
+                aviso(nombresModo[modo] + " ✔ (pantalla en " + ahoraTxt + ")")
             }
+        }.start()
+    }
+
+    private fun pintarModos(sel: Int) {
+        for (k in botonesModo.indices) {
+            val g = GradientDrawable()
+            g.cornerRadius = dp(10).toFloat()
+            if (k == sel) {
+                g.setColor(Color.parseColor("#12384F"))
+                g.setStroke(dp(2), cian)
+            } else {
+                g.setColor(fondoTile)
+                g.setStroke(dp(1), Color.parseColor("#2A3550"))
+            }
+            botonesModo[k].background = g
         }
     }
 
@@ -182,10 +261,11 @@ class FloatingService : Service() {
         burbuja.gravity = Gravity.CENTER
         val circulo = GradientDrawable()
         circulo.shape = GradientDrawable.OVAL
-        circulo.setColor(Color.parseColor("#CC1E88E5"))
+        circulo.setColor(Color.parseColor("#CC0A1326"))
+        circulo.setStroke(dp(2), cian)
         burbuja.background = circulo
 
-        val tam = dp(56)
+        val tam = dp(52)
         pBurbuja = WindowManager.LayoutParams(tam, tam, tipo, banderas, PixelFormat.TRANSLUCENT)
         pBurbuja.gravity = Gravity.TOP or Gravity.START
         pBurbuja.x = dp(8)
@@ -212,7 +292,7 @@ class FloatingService : Service() {
                         val dy = (e.rawY - ty).toInt()
                         if (!movio && (Math.abs(dx) > dp(6) || Math.abs(dy) > dp(6))) {
                             movio = true
-                            if (panelAbierto) alternarPanel()
+                            if (panelAbierto) cerrarPanel()
                         }
                         if (movio) {
                             pBurbuja.x = x0 + dx
@@ -264,58 +344,77 @@ class FloatingService : Service() {
         miraVisible = mostrar
     }
 
+    // ---------- HUD (FPS | temperatura | ping) ----------
+
+    private fun crearHud() {
+        hud = TextView(this)
+        hud.text = "-- FPS | --°C | --ms"
+        hud.textSize = 13f
+        hud.setTextColor(verde)
+        hud.setPadding(dp(10), dp(6), dp(10), dp(6))
+        val g = GradientDrawable()
+        g.setColor(Color.parseColor("#CC0A1326"))
+        g.cornerRadius = dp(6).toFloat()
+        g.setStroke(dp(1), cian)
+        hud.background = g
+
+        pHud = WindowManager.LayoutParams(
+            WRAP,
+            WRAP,
+            tipo,
+            banderas or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        )
+        pHud.gravity = Gravity.TOP or Gravity.START
+        pHud.x = dp(8)
+        pHud.y = dp(28)
+    }
+
+    private fun asegurarLoop() {
+        if (corriendo) return
+        corriendo = true
+        Thread {
+            while (hudActivo || panelAbierto) {
+                val listo = Herramientas.listo()
+                val ram = Herramientas.ramUso(this).first
+                val fps = if (listo) Herramientas.fps(Herramientas.juego(this)) else -1
+                val temp = tempBateria()
+                ciclo++
+                if (listo && ciclo % 3 == 0) ultimoPing = medirPing()
+                val ping = ultimoPing
+                ui.post { pintarMonitor(fps, ram, temp, ping) }
+                Thread.sleep(1000)
+            }
+            corriendo = false
+        }.start()
+    }
+
+    private fun pintarMonitor(fps: Int, ram: Int, temp: Float, ping: Int) {
+        val f = if (fps >= 0) "$fps" else "--"
+        val t = if (temp > 0) String.format(Locale.US, "%.1f", temp) else "--"
+        val p = if (ping >= 0) "$ping" else "--"
+        chipFps.text = "$f FPS"
+        chipRam.text = "RAM $ram%"
+        chipTemp.text = "${t}°C • ${p}ms"
+        hud.text = "$f FPS | ${t}°C | ${p}ms"
+        tileHealth.estado.text = "${t}°C"
+        tilePing.estado.text = "$p ms"
+    }
+
     // ---------- Piezas de diseño ----------
 
     private fun pildora(radio: Int): GradientDrawable {
         val g = GradientDrawable()
-        g.setColor(Color.parseColor("#26FFFFFF"))
+        g.setColor(Color.parseColor("#1A2A44"))
         g.cornerRadius = dp(radio).toFloat()
-        g.setStroke(dp(1), Color.parseColor("#80FFFFFF"))
+        g.setStroke(dp(1), Color.parseColor("#5019C6F0"))
         return g
     }
 
-    private fun circuloFondo(activo: Boolean): GradientDrawable {
-        val g = GradientDrawable()
-        g.shape = GradientDrawable.OVAL
-        g.setColor(if (activo) azulSuave else Color.parseColor("#26FFFFFF"))
-        g.setStroke(dp(1), Color.parseColor("#80FFFFFF"))
-        return g
-    }
-
-    private fun botonCirculo(t: String, alTocar: () -> Unit): TextView {
-        val v = TextView(this)
-        v.text = t
-        v.textSize = 16f
-        v.gravity = Gravity.CENTER
-        v.setTextColor(Color.WHITE)
-        v.setOnClickListener { alTocar() }
-        val lp = LinearLayout.LayoutParams(dp(36), dp(36))
-        lp.marginStart = dp(8)
-        v.layoutParams = lp
-        return v
-    }
-
-    private fun indicador(activo: Boolean): TextView {
-        val t = TextView(this)
-        t.gravity = Gravity.CENTER
-        t.textSize = 14f
-        t.setTextColor(Color.WHITE)
-        t.layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
-        pintarIndicador(t, activo)
-        return t
-    }
-
-    private fun pintarIndicador(t: TextView, activo: Boolean) {
-        t.text = if (activo) "✓" else ""
-        val g = GradientDrawable()
-        g.shape = GradientDrawable.OVAL
-        if (activo) {
-            g.setColor(azul)
-        } else {
-            g.setColor(Color.TRANSPARENT)
-            g.setStroke(dp(1), Color.parseColor("#B3FFFFFF"))
-        }
-        t.background = g
+    private fun paramsFila(): LinearLayout.LayoutParams {
+        val lp = LinearLayout.LayoutParams(MATCH, WRAP)
+        lp.topMargin = dp(8)
+        return lp
     }
 
     private fun valorTexto(t: String): TextView {
@@ -326,18 +425,12 @@ class FloatingService : Service() {
         return v
     }
 
-    private fun paramsFila(): LinearLayout.LayoutParams {
-        val lp = LinearLayout.LayoutParams(MATCH, WRAP)
-        lp.topMargin = dp(8)
-        return lp
-    }
-
     private fun fila(texto: String, derecha: View, alTocar: () -> Unit): LinearLayout {
         val f = LinearLayout(this)
         f.orientation = LinearLayout.HORIZONTAL
         f.gravity = Gravity.CENTER_VERTICAL
         f.setPadding(dp(16), dp(10), dp(12), dp(10))
-        f.background = pildora(22)
+        f.background = pildora(14)
         val t = TextView(this)
         t.text = texto
         t.setTextColor(Color.WHITE)
@@ -359,7 +452,7 @@ class FloatingService : Service() {
         val c = LinearLayout(this)
         c.orientation = LinearLayout.VERTICAL
         c.setPadding(dp(16), dp(12), dp(16), dp(8))
-        c.background = pildora(22)
+        c.background = pildora(14)
 
         val arriba = LinearLayout(this)
         arriba.orientation = LinearLayout.HORIZONTAL
@@ -378,7 +471,7 @@ class FloatingService : Service() {
         val barra = SeekBar(this)
         barra.max = max - min
         barra.progress = valor - min
-        barra.progressTintList = ColorStateList.valueOf(azul)
+        barra.progressTintList = ColorStateList.valueOf(cian)
         barra.thumbTintList = ColorStateList.valueOf(Color.WHITE)
         barra.progressBackgroundTintList =
             ColorStateList.valueOf(Color.parseColor("#66FFFFFF"))
@@ -397,286 +490,346 @@ class FloatingService : Service() {
         return c
     }
 
-    private fun tarjetaNiveles(
-        titulo: String,
-        nombres: List<String>,
-        inicial: Int,
-        pista: String,
-        alSoltar: (Int) -> Unit
-    ): LinearLayout {
+    private fun botonCuadro(t: String, color: Int, alTocar: () -> Unit): TextView {
+        val v = TextView(this)
+        v.text = t
+        v.textSize = 14f
+        v.gravity = Gravity.CENTER
+        v.setTextColor(Color.WHITE)
+        v.setTypeface(v.typeface, Typeface.BOLD)
+        val g = GradientDrawable()
+        g.setColor(Color.parseColor("#0F1A2E"))
+        g.cornerRadius = dp(8).toFloat()
+        g.setStroke(dp(2), color)
+        v.background = g
+        v.setOnClickListener { alTocar() }
+        val lp = LinearLayout.LayoutParams(dp(34), dp(34))
+        lp.marginStart = dp(6)
+        v.layoutParams = lp
+        return v
+    }
+
+    private fun chip(t: String, colorTexto: Int): TextView {
+        val v = TextView(this)
+        v.text = t
+        v.textSize = 11f
+        v.gravity = Gravity.CENTER
+        v.setTextColor(colorTexto)
+        v.setTypeface(v.typeface, Typeface.BOLD)
+        v.setSingleLine(true)
+        v.setPadding(dp(4), dp(7), dp(4), dp(7))
+        val g = GradientDrawable()
+        g.setColor(Color.parseColor("#0F1A2E"))
+        g.cornerRadius = dp(8).toFloat()
+        g.setStroke(dp(1), cian)
+        v.background = g
+        return v
+    }
+
+    private fun botonModo(nombre: String, sub: String, alTocar: () -> Unit): LinearLayout {
         val c = LinearLayout(this)
         c.orientation = LinearLayout.VERTICAL
-        c.setPadding(dp(16), dp(12), dp(16), dp(10))
-        c.background = pildora(22)
-
-        val arriba = LinearLayout(this)
-        arriba.orientation = LinearLayout.HORIZONTAL
-        val t = TextView(this)
-        t.text = titulo
-        t.setTextColor(Color.WHITE)
-        t.textSize = 15f
-        arriba.addView(t, LinearLayout.LayoutParams(0, WRAP, 1f))
-        val v = TextView(this)
-        v.text = nombres[inicial]
-        v.setTextColor(Color.WHITE)
-        v.textSize = 15f
-        arriba.addView(v)
-        c.addView(arriba)
-
-        val barra = SeekBar(this)
-        barra.max = nombres.size - 1
-        barra.progress = inicial
-        barra.progressTintList = ColorStateList.valueOf(azul)
-        barra.thumbTintList = ColorStateList.valueOf(Color.WHITE)
-        barra.progressBackgroundTintList =
-            ColorStateList.valueOf(Color.parseColor("#66FFFFFF"))
-        barra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(s: SeekBar, progreso: Int, usuario: Boolean) {
-                v.text = nombres[progreso]
-            }
-
-            override fun onStartTrackingTouch(s: SeekBar) {}
-
-            override fun onStopTrackingTouch(s: SeekBar) {
-                alSoltar(s.progress)
-            }
-        })
-        c.addView(barra)
-
-        val p = TextView(this)
-        p.text = pista
-        p.setTextColor(Color.parseColor("#CCFFFFFF"))
-        p.textSize = 12f
-        c.addView(p)
-
-        c.layoutParams = paramsFila()
+        c.gravity = Gravity.CENTER
+        c.setPadding(dp(2), dp(8), dp(2), dp(8))
+        val a = TextView(this)
+        a.text = nombre
+        a.textSize = 10f
+        a.gravity = Gravity.CENTER
+        a.setSingleLine(true)
+        a.setTextColor(Color.WHITE)
+        a.setTypeface(a.typeface, Typeface.BOLD)
+        val b = TextView(this)
+        b.text = sub
+        b.textSize = 9f
+        b.gravity = Gravity.CENTER
+        b.setTextColor(Color.parseColor("#8A93A6"))
+        c.addView(a)
+        c.addView(b)
+        c.setOnClickListener { alTocar() }
         return c
     }
 
-    private fun pagina(): LinearLayout {
-        val p = LinearLayout(this)
-        p.orientation = LinearLayout.VERTICAL
-        p.setPadding(0, 0, 0, dp(8))
-        return p
+    private fun tile(icono: String, nombre: String, estado: String, alTocar: () -> Unit): Tile {
+        val c = LinearLayout(this)
+        c.orientation = LinearLayout.VERTICAL
+        c.gravity = Gravity.CENTER
+        c.setPadding(dp(2), dp(8), dp(2), dp(8))
+
+        val i = TextView(this)
+        i.text = icono
+        i.textSize = 18f
+        i.gravity = Gravity.CENTER
+
+        val n = TextView(this)
+        n.text = nombre
+        n.textSize = 10f
+        n.gravity = Gravity.CENTER
+        n.setSingleLine(true)
+        n.setTextColor(Color.WHITE)
+        n.setTypeface(n.typeface, Typeface.BOLD)
+
+        val e = TextView(this)
+        e.text = estado
+        e.textSize = 9f
+        e.gravity = Gravity.CENTER
+        e.setSingleLine(true)
+
+        c.addView(i)
+        c.addView(n)
+        c.addView(e)
+        c.setOnClickListener { alTocar() }
+
+        val t = Tile(c, e)
+        marcar(t, false, estado)
+        return t
+    }
+
+    private fun marcar(t: Tile, activo: Boolean, texto: String) {
+        t.estado.text = texto
+        t.estado.setTextColor(if (activo) cian else Color.parseColor("#8A93A6"))
+        val g = GradientDrawable()
+        g.cornerRadius = dp(10).toFloat()
+        if (activo) {
+            g.setColor(Color.parseColor("#12384F"))
+            g.setStroke(dp(2), cian)
+        } else {
+            g.setColor(fondoTile)
+            g.setStroke(dp(1), Color.parseColor("#2A3550"))
+        }
+        t.vista.background = g
+    }
+
+    private fun filaTiles(vararg ts: Tile): LinearLayout {
+        val f = LinearLayout(this)
+        f.orientation = LinearLayout.HORIZONTAL
+        for (k in ts.indices) {
+            val lp = LinearLayout.LayoutParams(0, WRAP, 1f)
+            lp.marginEnd = if (k == ts.size - 1) 0 else dp(4)
+            f.addView(ts[k].vista, lp)
+        }
+        f.layoutParams = paramsFila()
+        return f
     }
 
     // ---------- Panel ----------
 
     private fun crearPanel() {
-        tema = prefs.getInt("panel_tema", 0)
+        val dnd = Herramientas.opciones.first { it.id == "dnd" }
 
-        val raiz = LinearLayout(this)
-        raiz.orientation = LinearLayout.HORIZONTAL
-        raiz.setPadding(dp(8), dp(8), dp(8), dp(8))
-        panelFondo = GradientDrawable()
-        panelFondo.cornerRadius = dp(28).toFloat()
-        panelFondo.setStroke(dp(1), Color.parseColor("#66FFFFFF"))
-        raiz.background = panelFondo
-
-        // Barra lateral con íconos
-        val lateral = LinearLayout(this)
-        lateral.orientation = LinearLayout.VERTICAL
-        lateral.gravity = Gravity.CENTER_HORIZONTAL
-        lateral.setPadding(dp(6), dp(6), dp(6), dp(6))
-        lateral.background = pildora(28)
-        val iconos = listOf("👁", "🎯", "🛠", "⚙")
-        for (i in iconos.indices) {
-            val t = TextView(this)
-            t.text = iconos[i]
-            t.textSize = 20f
-            t.gravity = Gravity.CENTER
-            t.setTextColor(Color.WHITE)
-            t.setOnClickListener { mostrarTab(i) }
-            val lp = LinearLayout.LayoutParams(dp(44), dp(44))
-            lp.topMargin = dp(4)
-            lp.bottomMargin = dp(4)
-            lateral.addView(t, lp)
-            tabs.add(t)
-        }
-        raiz.addView(lateral, LinearLayout.LayoutParams(dp(56), MATCH))
-
-        // Columna derecha: cabecera + contenido
-        val derecha = LinearLayout(this)
-        derecha.orientation = LinearLayout.VERTICAL
-
+        // Cabecera: título + minimizar + cerrar
         val cab = LinearLayout(this)
         cab.orientation = LinearLayout.HORIZONTAL
         cab.gravity = Gravity.CENTER_VERTICAL
+        val titulo = TextView(this)
+        titulo.text = "◆ FERMXN CORE"
+        titulo.textSize = 16f
+        titulo.setTextColor(Color.WHITE)
+        titulo.setTypeface(titulo.typeface, Typeface.BOLD)
+        cab.addView(titulo, LinearLayout.LayoutParams(0, WRAP, 1f))
+        cab.addView(botonCuadro("▼", cian) { cerrarPanel() })
+        cab.addView(botonCuadro("X", rojo) { stopSelf() })
 
-        tituloTab = TextView(this)
-        tituloTab.setTextColor(Color.WHITE)
-        tituloTab.textSize = 15f
-        tituloTab.setPadding(dp(16), dp(8), dp(16), dp(8))
-        tituloTab.background = pildora(22)
-        cab.addView(tituloTab, LinearLayout.LayoutParams(0, WRAP, 1f))
+        // Chips: FPS, RAM, temperatura y ping
+        chipFps = chip("-- FPS", verde)
+        chipRam = chip("RAM --%", Color.WHITE)
+        chipTemp = chip("--°C • --ms", Color.WHITE)
+        val filaChips = LinearLayout(this)
+        filaChips.orientation = LinearLayout.HORIZONTAL
+        val lp1 = LinearLayout.LayoutParams(0, WRAP, 1f)
+        lp1.marginEnd = dp(4)
+        val lp2 = LinearLayout.LayoutParams(0, WRAP, 1f)
+        lp2.marginEnd = dp(4)
+        val lp3 = LinearLayout.LayoutParams(0, WRAP, 1.3f)
+        filaChips.addView(chipFps, lp1)
+        filaChips.addView(chipRam, lp2)
+        filaChips.addView(chipTemp, lp3)
+        filaChips.layoutParams = paramsFila()
 
-        bLuna = botonCirculo("🌙") {
-            tema = 0
-            prefs.edit().putInt("panel_tema", 0).apply()
-            aplicarTema()
+        // Modos
+        val hzTxt = String.format(Locale.US, "%.0fHz", hzMaximo())
+        val subs = listOf("60Hz", "Auto", hzTxt, "$hzTxt+")
+        val filaModos = LinearLayout(this)
+        filaModos.orientation = LinearLayout.HORIZONTAL
+        for (k in nombresModo.indices) {
+            val b = botonModo(nombresModo[k], subs[k]) { aplicarModo(k) }
+            botonesModo.add(b)
+            val lp = LinearLayout.LayoutParams(0, WRAP, 1f)
+            lp.marginEnd = if (k == nombresModo.size - 1) 0 else dp(4)
+            filaModos.addView(b, lp)
         }
-        bSol = botonCirculo("☀") {
-            tema = 1
-            prefs.edit().putInt("panel_tema", 1).apply()
-            aplicarTema()
+        filaModos.layoutParams = paramsFila()
+        pintarModos(prefs.getInt("modo", 1).coerceIn(0, 3))
+
+        // Botones de la cuadrícula
+        val tBoost = tile("🚀", "BOOST", "CLEAN") {
+            segundoPlano {
+                Herramientas.limpiarRam()
+                aviso("RAM limpiada ✔")
+            }
         }
-        cab.addView(bLuna)
-        cab.addView(bSol)
-        derecha.addView(cab, LinearLayout.LayoutParams(MATCH, WRAP))
+        val tCache = tile("🗑", "CACHE", "CLEAN") {
+            segundoPlano {
+                Herramientas.borrarCache()
+                aviso("Caché borrada ✔")
+            }
+        }
+        tileDnd = tile("🔕", "DND", "OFF") {
+            segundoPlano {
+                val nuevo = !Herramientas.activa(this, dnd.id)
+                Herramientas.poner(this, dnd, nuevo)
+                ui.post { marcar(tileDnd, nuevo, if (nuevo) "ON" else "OFF") }
+            }
+        }
+        val dndOn = Herramientas.activa(this, dnd.id)
+        marcar(tileDnd, dndOn, if (dndOn) "ON" else "OFF")
 
-        scrollContenido = ScrollView(this)
-        val lpScroll = LinearLayout.LayoutParams(MATCH, 0, 1f)
-        derecha.addView(scrollContenido, lpScroll)
-
-        val lpDerecha = LinearLayout.LayoutParams(0, MATCH, 1f)
-        lpDerecha.marginStart = dp(8)
-        raiz.addView(derecha, lpDerecha)
-
-        // ----- Página 0: Monitor -----
-        val pgMonitor = pagina()
-        val indMon = indicador(false)
-        pgMonitor.addView(fila("Mostrar FPS / CPU / RAM", indMon) {
-            if (monitoreando) {
-                detenerMonitor()
-                pintarIndicador(indMon, false)
-            } else if (!Herramientas.listo()) {
+        tileHud = tile("📊", "FPS HUD", "OFF") {
+            if (!Herramientas.listo()) {
                 aviso("Conectá Shizuku primero")
             } else {
-                iniciarMonitor()
-                pintarIndicador(indMon, true)
+                hudActivo = !hudActivo
+                if (hudActivo) wm.addView(hud, pHud) else wm.removeView(hud)
+                marcar(tileHud, hudActivo, if (hudActivo) "ON" else "OFF")
+                asegurarLoop()
             }
-        })
-        textoStats = TextView(this)
-        textoStats.setTextColor(Color.WHITE)
-        textoStats.textSize = 14f
-        textoStats.setPadding(dp(16), dp(12), dp(16), dp(12))
-        textoStats.background = pildora(18)
-        textoStats.visibility = View.GONE
-        pgMonitor.addView(textoStats, paramsFila())
-        paginas.add(pgMonitor)
+        }
+        val tShot = tile("📸", "SHOT", "SNAP") {
+            segundoPlano {
+                ui.post { cerrarPanel() }
+                Thread.sleep(800)
+                Herramientas.sh("input keyevent 120")
+                aviso("Captura tomada 📸")
+            }
+        }
+        val tMusic = tile("🎵", "MUSIC", "PLAY/PAUSE") {
+            segundoPlano {
+                Herramientas.sh("input keyevent 85")
+                aviso("Música ⏯")
+            }
+        }
 
-        // ----- Página 1: Mira -----
-        val pgMira = pagina()
-        val indMira = indicador(false)
-        pgMira.addView(fila("Aim head disimulado", indMira) {
+        tileGuide = tile("🎯", "GUIDE", "OFF") {
             mostrarMira(!miraVisible)
-            pintarIndicador(indMira, miraVisible)
-        })
+            marcar(tileGuide, miraVisible, if (miraVisible) "ON" else "OFF")
+        }
+        tileMiraSet = tile("⚙", "MIRA", "SET") {
+            val ver = seccionMira.visibility != View.VISIBLE
+            seccionMira.visibility = if (ver) View.VISIBLE else View.GONE
+            marcar(tileMiraSet, ver, if (ver) "OPEN" else "SET")
+        }
+        tileTouch = tile("👆", "TOUCH", "OFF") {
+            segundoPlano {
+                val nuevo = !Herramientas.activa(this, opTouch.id)
+                Herramientas.poner(this, opTouch, nuevo)
+                ui.post { marcar(tileTouch, nuevo, if (nuevo) "ON" else "OFF") }
+            }
+        }
+        val touchOn = Herramientas.activa(this, opTouch.id)
+        marcar(tileTouch, touchOn, if (touchOn) "ON" else "OFF")
+
+        tilePerfil = tile("🎮", "PROFILE", "MAX") {
+            val nuevo = if (Herramientas.juego(this) == Herramientas.FF_MAX) {
+                Herramientas.FF_NORMAL
+            } else {
+                Herramientas.FF_MAX
+            }
+            Herramientas.elegirJuego(this, nuevo)
+            marcar(tilePerfil, true, nombrePerfil())
+            aviso("Juego: " + (if (nuevo == Herramientas.FF_MAX) "Free Fire MAX" else "Free Fire"))
+        }
+        marcar(tilePerfil, true, nombrePerfil())
+
+        tilePing = tile("📶", "PING", "-- ms") {
+            segundoPlano {
+                val p = medirPing()
+                ui.post { tilePing.estado.text = if (p >= 0) "$p ms" else "-- ms" }
+            }
+        }
+        tileHealth = tile("🔋", "HEALTH", "--°C") { resumenBateria() }
+
+        // Ajustes de la mira (se abre con el botón MIRA)
+        seccionMira = LinearLayout(this)
+        seccionMira.orientation = LinearLayout.VERTICAL
+        seccionMira.visibility = View.GONE
+
         val vDiseno = valorTexto(MiraView.NOMBRES[mira.diseno] + "  ⌄")
-        pgMira.addView(fila("Diseño", vDiseno) {
+        seccionMira.addView(fila("Diseño", vDiseno) {
             val n = (mira.diseno + 1) % MiraView.NOMBRES.size
             mira.diseno = n
             prefs.edit().putInt("mira_diseno", n).apply()
             vDiseno.text = MiraView.NOMBRES[n] + "  ⌄"
         })
         val vColor = valorTexto(nombreColor() + "  ⌄")
-        pgMira.addView(fila("Color", vColor) {
+        seccionMira.addView(fila("Color", vColor) {
             val n = (mira.colorIndice + 1) % MiraView.COLORES.size
             mira.colorIndice = n
             prefs.edit().putInt("mira_color", n).apply()
             vColor.text = nombreColor() + "  ⌄"
         })
         val tamActual = prefs.getInt("mira_tam", 80).coerceIn(24, 1000)
-        pgMira.addView(tarjetaSlider("Tamaño de la mira", tamActual, 24, 1000) { v ->
+        seccionMira.addView(tarjetaSlider("Tamaño de la mira", tamActual, 24, 1000) { v ->
             prefs.edit().putInt("mira_tam", v).apply()
             aplicarTamanoMira()
         })
-        paginas.add(pgMira)
 
-        // ----- Página 2: Herramientas -----
-        val pgHerr = pagina()
-        val nivelSens = prefs.getInt("sens_nivel", 0).coerceIn(0, 2)
-        pgHerr.addView(
-            tarjetaNiveles(
-                "Tasa de fotogramas",
-                nombresSens,
-                nivelSens,
-                "Sube la frecuencia de pantalla para una respuesta táctil más rápida. " +
-                    "Al soltar te muestro los Hz reales."
-            ) { n -> aplicarSensibilidad(n) }
-        )
-        val indAim = indicador(Herramientas.activa(this, opAimlock.id))
-        pgHerr.addView(fila("aimlock", indAim) {
-            segundoPlano {
-                val nuevo = !Herramientas.activa(this, opAimlock.id)
-                Herramientas.poner(this, opAimlock, nuevo)
-                ui.post { pintarIndicador(indAim, nuevo) }
-                aviso(if (nuevo) "aimlock activado ✔" else "aimlock desactivado")
-            }
-        })
-        pgHerr.addView(fila("Limpiar RAM", valorTexto("›")) {
-            segundoPlano {
-                Herramientas.limpiarRam()
-                aviso("RAM limpiada ✔")
-            }
-        })
-        pgHerr.addView(fila("Borrar caché", valorTexto("›")) {
-            segundoPlano {
-                Herramientas.borrarCache()
-                aviso("Caché borrada ✔")
-            }
-        })
-        paginas.add(pgHerr)
+        // Contenido con scroll
+        val contenido = LinearLayout(this)
+        contenido.orientation = LinearLayout.VERTICAL
+        contenido.addView(filaTiles(tBoost, tCache, tileDnd, tileHud, tShot, tMusic))
+        contenido.addView(filaTiles(tileGuide, tileMiraSet, tileTouch, tilePerfil, tilePing, tileHealth))
+        contenido.addView(seccionMira, paramsFila())
 
-        // ----- Página 3: Ajustes -----
-        val pgAjustes = pagina()
-        pgAjustes.addView(fila("Cerrar botón flotante", valorTexto("✕")) { stopSelf() })
-        paginas.add(pgAjustes)
+        val scroll = ScrollView(this)
+        scroll.addView(contenido)
 
+        // Panel completo
+        val raiz = LinearLayout(this)
+        raiz.orientation = LinearLayout.VERTICAL
+        raiz.setPadding(dp(10), dp(10), dp(10), dp(10))
+        val fondoPanel = GradientDrawable()
+        fondoPanel.setColor(Color.parseColor("#F20A1326"))
+        fondoPanel.cornerRadius = dp(20).toFloat()
+        fondoPanel.setStroke(dp(2), cian)
+        raiz.background = fondoPanel
+        raiz.addView(cab, LinearLayout.LayoutParams(MATCH, WRAP))
+        raiz.addView(filaChips)
+        raiz.addView(filaModos)
+        raiz.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
         panel = raiz
+
         pPanel = WindowManager.LayoutParams(
-            dp(380),
-            dp(260),
+            dp(360),
+            dp(300),
             tipo,
             banderas,
             PixelFormat.TRANSLUCENT
         )
-        pPanel.gravity = Gravity.TOP or Gravity.START
-
-        aplicarTema()
-        mostrarTab(0)
-    }
-
-    private fun aplicarTema() {
-        panelFondo.setColor(Color.parseColor(if (tema == 0) "#E6232A36" else "#D98A93A3"))
-        bLuna.background = circuloFondo(tema == 0)
-        bSol.background = circuloFondo(tema == 1)
-    }
-
-    private fun mostrarTab(i: Int) {
-        for (k in tabs.indices) {
-            val g = GradientDrawable()
-            g.shape = GradientDrawable.OVAL
-            g.setColor(if (k == i) azulSuave else Color.TRANSPARENT)
-            tabs[k].background = g
-        }
-        tituloTab.text = titulos[i]
-        scrollContenido.removeAllViews()
-        scrollContenido.addView(paginas[i])
+        pPanel.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
     }
 
     private fun alternarPanel() {
-        if (panelAbierto) {
-            wm.removeView(panel)
-            panelAbierto = false
-            return
-        }
+        if (panelAbierto) cerrarPanel() else abrirPanel()
+    }
+
+    private fun cerrarPanel() {
+        if (!panelAbierto) return
+        try { wm.removeView(panel) } catch (e: Throwable) { }
+        panelAbierto = false
+    }
+
+    private fun abrirPanel() {
         val dm = DisplayMetrics()
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(dm)
 
-        val ancho = minOf(dp(380), (dm.widthPixels * 0.92).toInt())
-        val alto = minOf(dp(260), (dm.heightPixels * 0.9).toInt())
-        pPanel.width = ancho
-        pPanel.height = alto
-
-        var px = pBurbuja.x + dp(62)
-        if (px + ancho > dm.widthPixels) px = pBurbuja.x - ancho - dp(6)
-        pPanel.x = maxOf(px, 0)
-        pPanel.y = pBurbuja.y.coerceIn(0, maxOf(0, dm.heightPixels - alto))
+        pPanel.width = minOf(dp(620), (dm.widthPixels * 0.96).toInt())
+        pPanel.height = minOf(dp(330), (dm.heightPixels * 0.88).toInt())
+        pPanel.x = 0
+        pPanel.y = if (dm.heightPixels < dm.widthPixels) dp(6) else dp(40)
 
         wm.addView(panel, pPanel)
         panelAbierto = true
+        asegurarLoop()
 
         // La burbuja queda siempre por encima del panel
         ui.post {
@@ -685,31 +838,5 @@ class FloatingService : Service() {
                 wm.addView(burbuja, pBurbuja)
             } catch (e: Throwable) { }
         }
-    }
-
-    // ---------- Monitor ----------
-
-    private fun iniciarMonitor() {
-        if (monitoreando) return
-        monitoreando = true
-        textoStats.visibility = View.VISIBLE
-        burbuja.textSize = 12f
-        Thread {
-            while (monitoreando) {
-                val s = Herramientas.estadisticas(this)
-                ui.post {
-                    textoStats.text = s.texto()
-                    burbuja.text = if (s.fps >= 0) "${s.fps}\nFPS" else "--\nFPS"
-                }
-                Thread.sleep(1000)
-            }
-        }.start()
-    }
-
-    private fun detenerMonitor() {
-        monitoreando = false
-        textoStats.visibility = View.GONE
-        burbuja.textSize = 22f
-        burbuja.text = "⚡"
     }
 }

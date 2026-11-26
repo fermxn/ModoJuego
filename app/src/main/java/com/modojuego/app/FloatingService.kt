@@ -33,6 +33,8 @@ class FloatingService : Service() {
 
     private class Tile(val vista: LinearLayout, val estado: TextView)
 
+    private data class ColorMacro(val nombre: String, val borde: Int, val relleno: Int)
+
     private lateinit var wm: WindowManager
     private lateinit var burbuja: TextView
     private lateinit var panel: LinearLayout
@@ -63,6 +65,17 @@ class FloatingService : Service() {
 
     private val botonesModo = mutableListOf<LinearLayout>()
     private val nombresModo = listOf("LOW POWER", "BALANCE", "PERFORMANCE", "EXTREME")
+
+    private val coloresMacro = listOf(
+        ColorMacro("CIAN", Color.parseColor("#19C6F0"), Color.parseColor("#3319C6F0")),
+        ColorMacro("AZUL", Color.parseColor("#2196F3"), Color.parseColor("#332196F3")),
+        ColorMacro("VERDE", Color.parseColor("#5CF2A0"), Color.parseColor("#335CF2A0")),
+        ColorMacro("ROJO", Color.parseColor("#FF4D5E"), Color.parseColor("#33FF4D5E")),
+        ColorMacro("MORADO", Color.parseColor("#B366FF"), Color.parseColor("#33B366FF")),
+        ColorMacro("AMARILLO", Color.parseColor("#FFD54F"), Color.parseColor("#33FFD54F")),
+        ColorMacro("NARANJA", Color.parseColor("#FF8A3D"), Color.parseColor("#33FF8A3D")),
+        ColorMacro("BLANCO", Color.parseColor("#FFFFFF"), Color.parseColor("#33FFFFFF"))
+    )
 
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("modojuego", MODE_PRIVATE) }
@@ -156,6 +169,11 @@ class FloatingService : Service() {
 
     private fun nombreColor(): String =
         MiraView.COLORES_NOMBRES[mira.colorIndice.coerceIn(0, MiraView.COLORES_NOMBRES.size - 1)]
+
+    private fun colorMacroActual(): ColorMacro {
+        val idx = prefs.getInt("macro_color", 0).coerceIn(0, coloresMacro.lastIndex)
+        return coloresMacro[idx]
+    }
 
     private fun nombrePerfil(): String =
         if (Herramientas.juego(this) == Herramientas.FF_MAX) "MAX" else "FF"
@@ -358,7 +376,9 @@ class FloatingService : Service() {
     // ---------- Bolita Macro ----------
 
     private fun crearBolitaMacro() {
-        macroBloqueada = prefs.getBoolean("macro_bloqueada", false)
+        // Por defecto dejamos pasar los toques detrás de la bolita si está bloqueada
+        macroBloqueada = prefs.getBoolean("macro_bloqueada", true)
+        val colorActual = colorMacroActual()
         val tamDp = prefs.getInt("macro_tam", 72).coerceIn(24, 1000)
         val grosorDp = prefs.getInt("macro_grosor", 3).coerceIn(1, 20)
         val alphaPct = prefs.getInt("macro_alpha", 70).coerceIn(10, 100)
@@ -366,8 +386,8 @@ class FloatingService : Service() {
         bolitaMacro = View(this)
         fondoBolitaMacro = GradientDrawable()
         fondoBolitaMacro.shape = GradientDrawable.OVAL
-        fondoBolitaMacro.setColor(Color.parseColor("#3319C6F0"))
-        fondoBolitaMacro.setStroke(dp(grosorDp), cian)
+        fondoBolitaMacro.setColor(colorActual.relleno)
+        fondoBolitaMacro.setStroke(dp(grosorDp), colorActual.borde)
         bolitaMacro.background = fondoBolitaMacro
         bolitaMacro.alpha = alphaPct / 100f
 
@@ -440,8 +460,8 @@ class FloatingService : Service() {
         tileBolitaCtrl.vista.alpha = 1f
         when {
             !macroVisible -> marcar(tileBolitaCtrl, false, "HIDE")
-            macroBloqueada -> marcar(tileBolitaCtrl, true, "LOCK")
-            else -> marcar(tileBolitaCtrl, true, "FREE")
+            macroBloqueada -> marcar(tileBolitaCtrl, true, "PASS")
+            else -> marcar(tileBolitaCtrl, true, "MOVE")
         }
     }
 
@@ -449,8 +469,10 @@ class FloatingService : Service() {
         macroBloqueada = bloqueada
         prefs.edit().putBoolean("macro_bloqueada", bloqueada).apply()
         if (bloqueada) {
+            // FLAG_NOT_TOUCHABLE permite presionar detrás de la bolita
             pMacro.flags = pMacro.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         } else {
+            // Quita FLAG_NOT_TOUCHABLE para poder arrastrar y mover la bolita
             pMacro.flags = pMacro.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         }
         if (macroVisible) {
@@ -460,6 +482,7 @@ class FloatingService : Service() {
     }
 
     private fun aplicarEstiloBolitaMacro() {
+        val colorActual = colorMacroActual()
         val tamDp = prefs.getInt("macro_tam", 72).coerceIn(24, 1000)
         val grosorDp = prefs.getInt("macro_grosor", 3).coerceIn(1, 20)
         val alphaPct = prefs.getInt("macro_alpha", 70).coerceIn(10, 100)
@@ -467,7 +490,8 @@ class FloatingService : Service() {
         val px = dp(tamDp)
         pMacro.width = px
         pMacro.height = px
-        fondoBolitaMacro.setStroke(dp(grosorDp), cian)
+        fondoBolitaMacro.setColor(colorActual.relleno)
+        fondoBolitaMacro.setStroke(dp(grosorDp), colorActual.borde)
         bolitaMacro.alpha = alphaPct / 100f
 
         if (macroVisible) {
@@ -869,15 +893,15 @@ class FloatingService : Service() {
             when {
                 !macroVisible -> {
                     mostrarBolitaMacro(true)
-                    aplicarBloqueoMacro(false)
-                    aviso("Bolita visible y libre")
-                }
-                !macroBloqueada -> {
                     aplicarBloqueoMacro(true)
-                    aviso("Posición de bolita bloqueada")
+                    aviso("Bolita visible (toque detrás activo)")
+                }
+                macroBloqueada -> {
+                    aplicarBloqueoMacro(false)
+                    aviso("Modo mover bolita activo")
                 }
                 else -> {
-                    aplicarBloqueoMacro(false)
+                    aplicarBloqueoMacro(true)
                     mostrarBolitaMacro(false)
                     aviso("Bolita oculta")
                 }
@@ -946,11 +970,19 @@ class FloatingService : Service() {
         seccionMacro.orientation = LinearLayout.VERTICAL
         seccionMacro.visibility = View.GONE
 
-        val vBloqueo = valorTexto(if (macroBloqueada) "LOCK 🔒" else "FREE 🔓")
-        seccionMacro.addView(fila("Posición de bolita", vBloqueo) {
+        val vBloqueo = valorTexto(if (macroBloqueada) "TOQUE DETRÁS 🔒" else "MOVER BOLITA 🔓")
+        seccionMacro.addView(fila("Toque y posición", vBloqueo) {
             val nuevoBloqueo = !macroBloqueada
             aplicarBloqueoMacro(nuevoBloqueo)
-            vBloqueo.text = if (nuevoBloqueo) "LOCK 🔒" else "FREE 🔓"
+            vBloqueo.text = if (nuevoBloqueo) "TOQUE DETRÁS 🔒" else "MOVER BOLITA 🔓"
+        })
+
+        val vColorMacro = valorTexto(colorMacroActual().nombre + "  ⌄")
+        seccionMacro.addView(fila("Color de bolita", vColorMacro) {
+            val siguiente = (prefs.getInt("macro_color", 0) + 1) % coloresMacro.size
+            prefs.edit().putInt("macro_color", siguiente).apply()
+            vColorMacro.text = coloresMacro[siguiente].nombre + "  ⌄"
+            aplicarEstiloBolitaMacro()
         })
 
         val tamMacroActual = prefs.getInt("macro_tam", 72).coerceIn(24, 1000)

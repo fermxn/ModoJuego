@@ -38,6 +38,7 @@ class FloatingService : Service() {
     private lateinit var panel: LinearLayout
     private lateinit var hud: TextView
     private lateinit var seccionMira: LinearLayout
+    private lateinit var seccionMacro: LinearLayout
     private lateinit var chipFps: TextView
     private lateinit var chipRam: TextView
     private lateinit var chipTemp: TextView
@@ -45,14 +46,19 @@ class FloatingService : Service() {
     private lateinit var tileHud: Tile
     private lateinit var tileGuide: Tile
     private lateinit var tileMiraSet: Tile
+    private lateinit var tileMacro: Tile
+    private lateinit var tileBolitaCtrl: Tile
     private lateinit var tileTouch: Tile
     private lateinit var tilePerfil: Tile
     private lateinit var tilePing: Tile
     private lateinit var tileHealth: Tile
     private lateinit var mira: MiraView
+    private lateinit var bolitaMacro: View
+    private lateinit var fondoBolitaMacro: GradientDrawable
     private lateinit var pBurbuja: WindowManager.LayoutParams
     private lateinit var pPanel: WindowManager.LayoutParams
     private lateinit var pMira: WindowManager.LayoutParams
+    private lateinit var pMacro: WindowManager.LayoutParams
     private lateinit var pHud: WindowManager.LayoutParams
 
     private val botonesModo = mutableListOf<LinearLayout>()
@@ -63,6 +69,9 @@ class FloatingService : Service() {
     private var creado = false
     private var panelAbierto = false
     private var miraVisible = false
+    private var macroActiva = false
+    private var macroVisible = false
+    private var macroBloqueada = false
     private var hudActivo = false
     private var ciclo = 0
     private var ultimoPing = -1
@@ -100,6 +109,7 @@ class FloatingService : Service() {
             wm = getSystemService(WINDOW_SERVICE) as WindowManager
             crearBurbuja()
             crearMira()
+            crearBolitaMacro()
             crearHud()
             crearPanel()
         }
@@ -110,6 +120,7 @@ class FloatingService : Service() {
         hudActivo = false
         try { if (panelAbierto) wm.removeView(panel) } catch (e: Throwable) { }
         try { if (miraVisible) wm.removeView(mira) } catch (e: Throwable) { }
+        try { if (macroVisible) wm.removeView(bolitaMacro) } catch (e: Throwable) { }
         try { wm.removeView(hud) } catch (e: Throwable) { }
         try { wm.removeView(burbuja) } catch (e: Throwable) { }
         super.onDestroy()
@@ -342,6 +353,126 @@ class FloatingService : Service() {
             wm.removeView(mira)
         }
         miraVisible = mostrar
+    }
+
+    // ---------- Bolita Macro ----------
+
+    private fun crearBolitaMacro() {
+        macroBloqueada = prefs.getBoolean("macro_bloqueada", false)
+        val tamDp = prefs.getInt("macro_tam", 72).coerceIn(24, 1000)
+        val grosorDp = prefs.getInt("macro_grosor", 3).coerceIn(1, 20)
+        val alphaPct = prefs.getInt("macro_alpha", 70).coerceIn(10, 100)
+
+        bolitaMacro = View(this)
+        fondoBolitaMacro = GradientDrawable()
+        fondoBolitaMacro.shape = GradientDrawable.OVAL
+        fondoBolitaMacro.setColor(Color.parseColor("#3319C6F0"))
+        fondoBolitaMacro.setStroke(dp(grosorDp), cian)
+        bolitaMacro.background = fondoBolitaMacro
+        bolitaMacro.alpha = alphaPct / 100f
+
+        val px = dp(tamDp)
+        var flagsMacro = banderas or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        if (macroBloqueada) {
+            flagsMacro = flagsMacro or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+
+        pMacro = WindowManager.LayoutParams(px, px, tipo, flagsMacro, PixelFormat.TRANSLUCENT)
+        pMacro.gravity = Gravity.TOP or Gravity.START
+        pMacro.x = prefs.getInt("macro_x", dp(160))
+        pMacro.y = prefs.getInt("macro_y", dp(160))
+
+        bolitaMacro.setOnTouchListener(object : View.OnTouchListener {
+            var x0 = 0
+            var y0 = 0
+            var tx = 0f
+            var ty = 0f
+
+            override fun onTouch(v: View, e: MotionEvent): Boolean {
+                if (macroBloqueada) return false
+                when (e.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        x0 = pMacro.x
+                        y0 = pMacro.y
+                        tx = e.rawX
+                        ty = e.rawY
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        pMacro.x = x0 + (e.rawX - tx).toInt()
+                        pMacro.y = y0 + (e.rawY - ty).toInt()
+                        wm.updateViewLayout(bolitaMacro, pMacro)
+                        return true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        prefs.edit()
+                            .putInt("macro_x", pMacro.x)
+                            .putInt("macro_y", pMacro.y)
+                            .apply()
+                        return true
+                    }
+                }
+                return false
+            }
+        })
+    }
+
+    private fun mostrarBolitaMacro(mostrar: Boolean) {
+        if (mostrar == macroVisible) return
+        if (mostrar) {
+            aplicarEstiloBolitaMacro()
+            wm.addView(bolitaMacro, pMacro)
+        } else {
+            wm.removeView(bolitaMacro)
+        }
+        macroVisible = mostrar
+    }
+
+    private fun actualizarBotonIndependienteBolita() {
+        if (!::tileBolitaCtrl.isInitialized) return
+        if (!macroActiva) {
+            tileBolitaCtrl.vista.alpha = 0.45f
+            marcar(tileBolitaCtrl, false, "OFF")
+            return
+        }
+        tileBolitaCtrl.vista.alpha = 1f
+        when {
+            !macroVisible -> marcar(tileBolitaCtrl, false, "HIDE")
+            macroBloqueada -> marcar(tileBolitaCtrl, true, "LOCK")
+            else -> marcar(tileBolitaCtrl, true, "FREE")
+        }
+    }
+
+    private fun aplicarBloqueoMacro(bloqueada: Boolean) {
+        macroBloqueada = bloqueada
+        prefs.edit().putBoolean("macro_bloqueada", bloqueada).apply()
+        if (bloqueada) {
+            pMacro.flags = pMacro.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        } else {
+            pMacro.flags = pMacro.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        }
+        if (macroVisible) {
+            wm.updateViewLayout(bolitaMacro, pMacro)
+        }
+        actualizarBotonIndependienteBolita()
+    }
+
+    private fun aplicarEstiloBolitaMacro() {
+        val tamDp = prefs.getInt("macro_tam", 72).coerceIn(24, 1000)
+        val grosorDp = prefs.getInt("macro_grosor", 3).coerceIn(1, 20)
+        val alphaPct = prefs.getInt("macro_alpha", 70).coerceIn(10, 100)
+
+        val px = dp(tamDp)
+        pMacro.width = px
+        pMacro.height = px
+        fondoBolitaMacro.setStroke(dp(grosorDp), cian)
+        bolitaMacro.alpha = alphaPct / 100f
+
+        if (macroVisible) {
+            wm.updateViewLayout(bolitaMacro, pMacro)
+        }
     }
 
     // ---------- HUD (FPS | temperatura | ping) ----------
@@ -717,6 +848,44 @@ class FloatingService : Service() {
             seccionMira.visibility = if (ver) View.VISIBLE else View.GONE
             marcar(tileMiraSet, ver, if (ver) "OPEN" else "SET")
         }
+        tileMacro = tile("🔵", "MACRO", "OFF") {
+            macroActiva = !macroActiva
+            if (macroActiva) {
+                mostrarBolitaMacro(true)
+                seccionMacro.visibility = View.VISIBLE
+                marcar(tileMacro, true, "ON")
+            } else {
+                mostrarBolitaMacro(false)
+                seccionMacro.visibility = View.GONE
+                marcar(tileMacro, false, "OFF")
+            }
+            actualizarBotonIndependienteBolita()
+        }
+        tileBolitaCtrl = tile("🔒", "BOLITA", "OFF") {
+            if (!macroActiva) {
+                aviso("Activá MACRO primero")
+                return@tile
+            }
+            when {
+                !macroVisible -> {
+                    mostrarBolitaMacro(true)
+                    aplicarBloqueoMacro(false)
+                    aviso("Bolita visible y libre")
+                }
+                !macroBloqueada -> {
+                    aplicarBloqueoMacro(true)
+                    aviso("Posición de bolita bloqueada")
+                }
+                else -> {
+                    aplicarBloqueoMacro(false)
+                    mostrarBolitaMacro(false)
+                    aviso("Bolita oculta")
+                }
+            }
+            actualizarBotonIndependienteBolita()
+        }
+        actualizarBotonIndependienteBolita()
+
         tileTouch = tile("👆", "TOUCH", "OFF") {
             segundoPlano {
                 val nuevo = !Herramientas.activa(this, opTouch.id)
@@ -772,12 +941,44 @@ class FloatingService : Service() {
             aplicarTamanoMira()
         })
 
+        // Ajustes de la bolita Macro (se abre al activar MACRO)
+        seccionMacro = LinearLayout(this)
+        seccionMacro.orientation = LinearLayout.VERTICAL
+        seccionMacro.visibility = View.GONE
+
+        val vBloqueo = valorTexto(if (macroBloqueada) "LOCK 🔒" else "FREE 🔓")
+        seccionMacro.addView(fila("Posición de bolita", vBloqueo) {
+            val nuevoBloqueo = !macroBloqueada
+            aplicarBloqueoMacro(nuevoBloqueo)
+            vBloqueo.text = if (nuevoBloqueo) "LOCK 🔒" else "FREE 🔓"
+        })
+
+        val tamMacroActual = prefs.getInt("macro_tam", 72).coerceIn(24, 1000)
+        seccionMacro.addView(tarjetaSlider("Tamaño de bolita", tamMacroActual, 24, 1000) { v ->
+            prefs.edit().putInt("macro_tam", v).apply()
+            aplicarEstiloBolitaMacro()
+        })
+
+        val grosorMacroActual = prefs.getInt("macro_grosor", 3).coerceIn(1, 20)
+        seccionMacro.addView(tarjetaSlider("Grosor de bolita", grosorMacroActual, 1, 20) { v ->
+            prefs.edit().putInt("macro_grosor", v).apply()
+            aplicarEstiloBolitaMacro()
+        })
+
+        val alphaMacroActual = prefs.getInt("macro_alpha", 70).coerceIn(10, 100)
+        seccionMacro.addView(tarjetaSlider("Transparencia bolita (%)", alphaMacroActual, 10, 100) { v ->
+            prefs.edit().putInt("macro_alpha", v).apply()
+            aplicarEstiloBolitaMacro()
+        })
+
         // Contenido con scroll
         val contenido = LinearLayout(this)
         contenido.orientation = LinearLayout.VERTICAL
         contenido.addView(filaTiles(tBoost, tCache, tileDnd, tileHud, tShot, tMusic))
-        contenido.addView(filaTiles(tileGuide, tileMiraSet, tileTouch, tilePerfil, tilePing, tileHealth))
+        contenido.addView(filaTiles(tileGuide, tileMiraSet, tileMacro, tileBolitaCtrl, tileTouch, tilePerfil))
+        contenido.addView(filaTiles(tilePing, tileHealth))
         contenido.addView(seccionMira, paramsFila())
+        contenido.addView(seccionMacro, paramsFila())
 
         val scroll = ScrollView(this)
         scroll.addView(contenido)

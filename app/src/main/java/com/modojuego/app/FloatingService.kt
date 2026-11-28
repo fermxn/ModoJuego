@@ -60,6 +60,7 @@ class FloatingService : Service() {
     private lateinit var tilePerfil: Tile
     private lateinit var tilePing: Tile
     private lateinit var tileHealth: Tile
+    private lateinit var tileStretch: Tile
     private lateinit var mira: MiraView
     private lateinit var bolitaMacro: View
     private lateinit var fondoBolitaMacro: GradientDrawable
@@ -93,6 +94,7 @@ class FloatingService : Service() {
     private var macroVisible = false
     private var macroBloqueada = false
     private var hudActivo = false
+    private var pantallaEstirada = false
     private var ciclo = 0
     private var ultimoPing = -1
 
@@ -235,6 +237,27 @@ class FloatingService : Service() {
         val t = tempBateria()
         val tTxt = if (t > 0) String.format(Locale.US, "%.1f°C", t) else "--"
         aviso("Batería $pct% · $tTxt · salud $salud")
+    }
+
+    // ---------- Estirar pantalla (vía Shizuku) ----------
+
+    private fun aplicarEstirado(activar: Boolean) {
+        if (!Herramientas.listo()) {
+            aviso("Conectá Shizuku primero")
+            return
+        }
+        Thread {
+            if (activar) {
+                Herramientas.sh("wm density 320; settings put global policy_control immersive.full=*")
+            } else {
+                Herramientas.sh("wm density reset; wm size reset; settings delete global policy_control")
+            }
+            ui.post {
+                pantallaEstirada = activar
+                marcar(tileStretch, activar, if (activar) "ON" else "OFF")
+                aviso(if (activar) "Pantalla estirada ✔" else "Pantalla normal ✔")
+            }
+        }.start()
     }
 
     // ---------- Modos (frecuencia de pantalla) ----------
@@ -1102,6 +1125,11 @@ class FloatingService : Service() {
         }
         tileHealth = tile("🔋", "HEALTH", "--°C") { resumenBateria() }
 
+        tileStretch = tile("↔", "STRETCH", "OFF") {
+            aplicarEstirado(!pantallaEstirada)
+        }
+        marcar(tileStretch, pantallaEstirada, if (pantallaEstirada) "ON" else "OFF")
+
         seccionMira = LinearLayout(this)
         seccionMira.orientation = LinearLayout.VERTICAL
         seccionMira.visibility = View.VISIBLE
@@ -1202,7 +1230,7 @@ class FloatingService : Service() {
         tabOptimizar.addView(subtituloSeccion("Sistema"))
         tabOptimizar.addView(filaTiles(tBoost, tCache, tileDnd))
         tabOptimizar.addView(subtituloSeccion("Juego y Red"))
-        tabOptimizar.addView(filaTiles(tileTouch, tilePerfil, tilePing, tileHealth))
+        tabOptimizar.addView(filaTiles(tileTouch, tilePerfil, tilePing, tileHealth, tileStretch))
 
         tabRapido = LinearLayout(this)
         tabRapido.orientation = LinearLayout.VERTICAL

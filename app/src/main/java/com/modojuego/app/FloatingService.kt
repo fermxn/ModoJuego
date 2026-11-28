@@ -41,6 +41,12 @@ class FloatingService : Service() {
     private lateinit var hud: TextView
     private lateinit var seccionMira: LinearLayout
     private lateinit var seccionMacro: LinearLayout
+    private lateinit var tabModosHud: LinearLayout
+    private lateinit var tabMira: LinearLayout
+    private lateinit var tabMacro: LinearLayout
+    private lateinit var tabOptimizar: LinearLayout
+    private lateinit var tabRapido: LinearLayout
+    private val iconosPestanas = mutableListOf<TextView>()
     private lateinit var chipFps: TextView
     private lateinit var chipRam: TextView
     private lateinit var chipTemp: TextView
@@ -81,6 +87,7 @@ class FloatingService : Service() {
     private val prefs by lazy { getSharedPreferences("modojuego", MODE_PRIVATE) }
     private var creado = false
     private var panelAbierto = false
+    private var pestanaActiva = 0
     private var miraVisible = false
     private var macroActiva = false
     private var macroVisible = false
@@ -97,7 +104,11 @@ class FloatingService : Service() {
     private val cian = Color.parseColor("#19C6F0")
     private val verde = Color.parseColor("#5CF2A0")
     private val rojo = Color.parseColor("#FF4D5E")
-    private val fondoTile = Color.parseColor("#0F1A2E")
+    private val fondoTile = Color.parseColor("#663A3E44")
+    private val grisPanel = Color.parseColor("#CC5A5E65")
+    private val grisRail = Color.parseColor("#B84A4E54")
+    private val grisCapsula = Color.parseColor("#66484C52")
+    private val bordeSuave = Color.parseColor("#99A5ACB5")
 
     private val opTouch = Herramientas.Opcion(
         "show_touches",
@@ -268,13 +279,13 @@ class FloatingService : Service() {
     private fun pintarModos(sel: Int) {
         for (k in botonesModo.indices) {
             val g = GradientDrawable()
-            g.cornerRadius = dp(10).toFloat()
+            g.cornerRadius = dp(16).toFloat()
             if (k == sel) {
-                g.setColor(Color.parseColor("#12384F"))
-                g.setStroke(dp(2), cian)
+                g.setColor(Color.parseColor("#887E8692"))
+                g.setStroke(dp(2), Color.WHITE)
             } else {
-                g.setColor(fondoTile)
-                g.setStroke(dp(1), Color.parseColor("#2A3550"))
+                g.setColor(grisCapsula)
+                g.setStroke(dp(1), bordeSuave)
             }
             botonesModo[k].background = g
         }
@@ -290,8 +301,8 @@ class FloatingService : Service() {
         burbuja.gravity = Gravity.CENTER
         val circulo = GradientDrawable()
         circulo.shape = GradientDrawable.OVAL
-        circulo.setColor(Color.parseColor("#CC0A1326"))
-        circulo.setStroke(dp(2), cian)
+        circulo.setColor(Color.parseColor("#B85A5E65"))
+        circulo.setStroke(dp(2), Color.WHITE)
         burbuja.background = circulo
 
         val tam = dp(52)
@@ -376,7 +387,6 @@ class FloatingService : Service() {
     // ---------- Bolita Macro ----------
 
     private fun crearBolitaMacro() {
-        // Por defecto dejamos pasar los toques detrás de la bolita si está bloqueada
         macroBloqueada = prefs.getBoolean("macro_bloqueada", true)
         val colorActual = colorMacroActual()
         val tamDp = prefs.getInt("macro_tam", 72).coerceIn(24, 1000)
@@ -469,10 +479,8 @@ class FloatingService : Service() {
         macroBloqueada = bloqueada
         prefs.edit().putBoolean("macro_bloqueada", bloqueada).apply()
         if (bloqueada) {
-            // FLAG_NOT_TOUCHABLE permite presionar detrás de la bolita
             pMacro.flags = pMacro.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         } else {
-            // Quita FLAG_NOT_TOUCHABLE para poder arrastrar y mover la bolita
             pMacro.flags = pMacro.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         }
         if (macroVisible) {
@@ -508,9 +516,9 @@ class FloatingService : Service() {
         hud.setTextColor(verde)
         hud.setPadding(dp(10), dp(6), dp(10), dp(6))
         val g = GradientDrawable()
-        g.setColor(Color.parseColor("#CC0A1326"))
-        g.cornerRadius = dp(6).toFloat()
-        g.setStroke(dp(1), cian)
+        g.setColor(Color.parseColor("#CC3E4248"))
+        g.cornerRadius = dp(12).toFloat()
+        g.setStroke(dp(1), bordeSuave)
         hud.background = g
 
         pHud = WindowManager.LayoutParams(
@@ -556,13 +564,13 @@ class FloatingService : Service() {
         tilePing.estado.text = "$p ms"
     }
 
-    // ---------- Piezas de diseño ----------
+    // ---------- Piezas de diseño estilo panel flotante ----------
 
     private fun pildora(radio: Int): GradientDrawable {
         val g = GradientDrawable()
-        g.setColor(Color.parseColor("#1A2A44"))
+        g.setColor(grisCapsula)
         g.cornerRadius = dp(radio).toFloat()
-        g.setStroke(dp(1), Color.parseColor("#5019C6F0"))
+        g.setStroke(dp(1), bordeSuave)
         return g
     }
 
@@ -572,11 +580,50 @@ class FloatingService : Service() {
         return lp
     }
 
+    private fun subtituloSeccion(texto: String): TextView {
+        val tv = TextView(this)
+        tv.text = texto.uppercase(Locale.US)
+        tv.textSize = 11f
+        tv.setTextColor(Color.parseColor("#D6DCE4"))
+        tv.setTypeface(tv.typeface, Typeface.BOLD)
+        tv.letterSpacing = 0.08f
+        val lp = LinearLayout.LayoutParams(MATCH, WRAP)
+        lp.topMargin = dp(10)
+        lp.bottomMargin = dp(2)
+        lp.marginStart = dp(4)
+        tv.layoutParams = lp
+        return tv
+    }
+
+    private fun indicadorCheck(activo: Boolean): TextView {
+        val v = TextView(this)
+        v.gravity = Gravity.CENTER
+        v.textSize = 13f
+        v.setTypeface(v.typeface, Typeface.BOLD)
+        val g = GradientDrawable()
+        g.shape = GradientDrawable.OVAL
+        if (activo) {
+            v.text = "✓"
+            v.setTextColor(Color.WHITE)
+            g.setColor(Color.parseColor("#8C929C"))
+            g.setStroke(dp(1), Color.WHITE)
+        } else {
+            v.text = ""
+            v.setTextColor(Color.TRANSPARENT)
+            g.setColor(Color.parseColor("#33383E44"))
+            g.setStroke(dp(1), bordeSuave)
+        }
+        v.background = g
+        v.layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
+        return v
+    }
+
     private fun valorTexto(t: String): TextView {
         val v = TextView(this)
         v.text = t
-        v.textSize = 14f
+        v.textSize = 13f
         v.setTextColor(Color.WHITE)
+        v.setTypeface(v.typeface, Typeface.BOLD)
         return v
     }
 
@@ -584,12 +631,12 @@ class FloatingService : Service() {
         val f = LinearLayout(this)
         f.orientation = LinearLayout.HORIZONTAL
         f.gravity = Gravity.CENTER_VERTICAL
-        f.setPadding(dp(16), dp(10), dp(12), dp(10))
-        f.background = pildora(14)
+        f.setPadding(dp(16), dp(11), dp(14), dp(11))
+        f.background = pildora(22)
         val t = TextView(this)
         t.text = texto
         t.setTextColor(Color.WHITE)
-        t.textSize = 15f
+        t.textSize = 14f
         f.addView(t, LinearLayout.LayoutParams(0, WRAP, 1f))
         f.addView(derecha)
         f.layoutParams = paramsFila()
@@ -607,29 +654,29 @@ class FloatingService : Service() {
         val c = LinearLayout(this)
         c.orientation = LinearLayout.VERTICAL
         c.setPadding(dp(16), dp(12), dp(16), dp(8))
-        c.background = pildora(14)
+        c.background = pildora(20)
 
         val arriba = LinearLayout(this)
         arriba.orientation = LinearLayout.HORIZONTAL
         val t = TextView(this)
         t.text = titulo
         t.setTextColor(Color.WHITE)
-        t.textSize = 15f
+        t.textSize = 14f
         arriba.addView(t, LinearLayout.LayoutParams(0, WRAP, 1f))
         val v = TextView(this)
         v.text = "$valor"
         v.setTextColor(Color.WHITE)
-        v.textSize = 15f
+        v.textSize = 14f
         arriba.addView(v)
         c.addView(arriba)
 
         val barra = SeekBar(this)
         barra.max = max - min
         barra.progress = valor - min
-        barra.progressTintList = ColorStateList.valueOf(cian)
+        barra.progressTintList = ColorStateList.valueOf(Color.WHITE)
         barra.thumbTintList = ColorStateList.valueOf(Color.WHITE)
         barra.progressBackgroundTintList =
-            ColorStateList.valueOf(Color.parseColor("#66FFFFFF"))
+            ColorStateList.valueOf(Color.parseColor("#55FFFFFF"))
         barra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, progreso: Int, usuario: Boolean) {
                 val nuevo = min + progreso
@@ -648,17 +695,17 @@ class FloatingService : Service() {
     private fun botonCuadro(t: String, color: Int, alTocar: () -> Unit): TextView {
         val v = TextView(this)
         v.text = t
-        v.textSize = 14f
+        v.textSize = 13f
         v.gravity = Gravity.CENTER
         v.setTextColor(Color.WHITE)
         v.setTypeface(v.typeface, Typeface.BOLD)
         val g = GradientDrawable()
-        g.setColor(Color.parseColor("#0F1A2E"))
-        g.cornerRadius = dp(8).toFloat()
-        g.setStroke(dp(2), color)
+        g.setColor(grisCapsula)
+        g.cornerRadius = dp(12).toFloat()
+        g.setStroke(dp(1), color)
         v.background = g
         v.setOnClickListener { alTocar() }
-        val lp = LinearLayout.LayoutParams(dp(34), dp(34))
+        val lp = LinearLayout.LayoutParams(dp(32), dp(32))
         lp.marginStart = dp(6)
         v.layoutParams = lp
         return v
@@ -672,11 +719,11 @@ class FloatingService : Service() {
         v.setTextColor(colorTexto)
         v.setTypeface(v.typeface, Typeface.BOLD)
         v.setSingleLine(true)
-        v.setPadding(dp(4), dp(7), dp(4), dp(7))
+        v.setPadding(dp(6), dp(7), dp(6), dp(7))
         val g = GradientDrawable()
-        g.setColor(Color.parseColor("#0F1A2E"))
-        g.cornerRadius = dp(8).toFloat()
-        g.setStroke(dp(1), cian)
+        g.setColor(grisCapsula)
+        g.cornerRadius = dp(14).toFloat()
+        g.setStroke(dp(1), bordeSuave)
         v.background = g
         return v
     }
@@ -685,7 +732,7 @@ class FloatingService : Service() {
         val c = LinearLayout(this)
         c.orientation = LinearLayout.VERTICAL
         c.gravity = Gravity.CENTER
-        c.setPadding(dp(2), dp(8), dp(2), dp(8))
+        c.setPadding(dp(4), dp(8), dp(4), dp(8))
         val a = TextView(this)
         a.text = nombre
         a.textSize = 10f
@@ -697,7 +744,7 @@ class FloatingService : Service() {
         b.text = sub
         b.textSize = 9f
         b.gravity = Gravity.CENTER
-        b.setTextColor(Color.parseColor("#8A93A6"))
+        b.setTextColor(Color.parseColor("#E0E4EA"))
         c.addView(a)
         c.addView(b)
         c.setOnClickListener { alTocar() }
@@ -708,11 +755,11 @@ class FloatingService : Service() {
         val c = LinearLayout(this)
         c.orientation = LinearLayout.VERTICAL
         c.gravity = Gravity.CENTER
-        c.setPadding(dp(2), dp(8), dp(2), dp(8))
+        c.setPadding(dp(4), dp(9), dp(4), dp(9))
 
         val i = TextView(this)
         i.text = icono
-        i.textSize = 18f
+        i.textSize = 17f
         i.gravity = Gravity.CENTER
 
         val n = TextView(this)
@@ -741,15 +788,15 @@ class FloatingService : Service() {
 
     private fun marcar(t: Tile, activo: Boolean, texto: String) {
         t.estado.text = texto
-        t.estado.setTextColor(if (activo) cian else Color.parseColor("#8A93A6"))
+        t.estado.setTextColor(if (activo) Color.WHITE else Color.parseColor("#D8DEE6"))
         val g = GradientDrawable()
-        g.cornerRadius = dp(10).toFloat()
+        g.cornerRadius = dp(16).toFloat()
         if (activo) {
-            g.setColor(Color.parseColor("#12384F"))
-            g.setStroke(dp(2), cian)
+            g.setColor(Color.parseColor("#88828A96"))
+            g.setStroke(dp(2), Color.WHITE)
         } else {
             g.setColor(fondoTile)
-            g.setStroke(dp(1), Color.parseColor("#2A3550"))
+            g.setStroke(dp(1), bordeSuave)
         }
         t.vista.background = g
     }
@@ -759,32 +806,149 @@ class FloatingService : Service() {
         f.orientation = LinearLayout.HORIZONTAL
         for (k in ts.indices) {
             val lp = LinearLayout.LayoutParams(0, WRAP, 1f)
-            lp.marginEnd = if (k == ts.size - 1) 0 else dp(4)
+            lp.marginEnd = if (k == ts.size - 1) 0 else dp(6)
             f.addView(ts[k].vista, lp)
         }
         f.layoutParams = paramsFila()
         return f
     }
 
-    // ---------- Panel ----------
+    private fun seleccionarPestana(indice: Int) {
+        pestanaActiva = indice
+        tabModosHud.visibility = if (indice == 0) View.VISIBLE else View.GONE
+        tabMira.visibility = if (indice == 1) View.VISIBLE else View.GONE
+        tabMacro.visibility = if (indice == 2) View.VISIBLE else View.GONE
+        tabOptimizar.visibility = if (indice == 3) View.VISIBLE else View.GONE
+        tabRapido.visibility = if (indice == 4) View.VISIBLE else View.GONE
+
+        for (i in iconosPestanas.indices) {
+            val tv = iconosPestanas[i]
+            val activo = i == indice
+            val g = GradientDrawable()
+            g.shape = GradientDrawable.OVAL
+            if (activo) {
+                g.setColor(Color.parseColor("#8E95A0"))
+                g.setStroke(dp(1), Color.WHITE)
+                tv.alpha = 1f
+            } else {
+                g.setColor(Color.TRANSPARENT)
+                tv.alpha = 0.75f
+            }
+            tv.background = g
+        }
+    }
+
+    private fun habilitarArrastrePanel(handle: View) {
+        handle.setOnTouchListener(object : View.OnTouchListener {
+            var x0 = 0
+            var y0 = 0
+            var tx = 0f
+            var ty = 0f
+            var arrastrando = false
+
+            override fun onTouch(v: View, e: MotionEvent): Boolean {
+                when (e.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        x0 = pPanel.x
+                        y0 = pPanel.y
+                        tx = e.rawX
+                        ty = e.rawY
+                        arrastrando = false
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = (e.rawX - tx).toInt()
+                        val dy = (e.rawY - ty).toInt()
+                        if (!arrastrando && (Math.abs(dx) > dp(4) || Math.abs(dy) > dp(4))) {
+                            arrastrando = true
+                        }
+                        if (arrastrando) {
+                            pPanel.x = x0 + dx
+                            pPanel.y = y0 + dy
+                            wm.updateViewLayout(panel, pPanel)
+                        }
+                        return true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        if (arrastrando) {
+                            prefs.edit()
+                                .putInt("panel_x", pPanel.x)
+                                .putInt("panel_y", pPanel.y)
+                                .apply()
+                        }
+                        return true
+                    }
+                }
+                return false
+            }
+        })
+    }
+
+    private fun centrarPanel() {
+        pPanel.x = dp(68)
+        pPanel.y = dp(40)
+        prefs.edit()
+            .putInt("panel_x", pPanel.x)
+            .putInt("panel_y", pPanel.y)
+            .apply()
+        if (panelAbierto) {
+            wm.updateViewLayout(panel, pPanel)
+        }
+        aviso("Panel centrado")
+    }
+
+    // ---------- Panel (diseño estilo captura + movimiento libre) ----------
 
     private fun crearPanel() {
         val dnd = Herramientas.opciones.first { it.id == "dnd" }
 
-        // Cabecera: título + minimizar + cerrar
+        val barraLateral = LinearLayout(this)
+        barraLateral.orientation = LinearLayout.VERTICAL
+        barraLateral.gravity = Gravity.CENTER_HORIZONTAL
+        barraLateral.setPadding(dp(6), dp(12), dp(6), dp(12))
+        val fondoRail = GradientDrawable()
+        fondoRail.setColor(grisRail)
+        fondoRail.cornerRadius = dp(24).toFloat()
+        barraLateral.background = fondoRail
+        habilitarArrastrePanel(barraLateral)
+
+        val defsPestana = listOf(
+            "👁" to 0,
+            "🎯" to 1,
+            "🔵" to 2,
+            "🛠" to 3,
+            "⚙" to 4
+        )
+        for ((emoji, idx) in defsPestana) {
+            val btn = TextView(this)
+            btn.text = emoji
+            btn.textSize = 18f
+            btn.gravity = Gravity.CENTER
+            btn.setTextColor(Color.WHITE)
+            val lp = LinearLayout.LayoutParams(dp(42), dp(42))
+            lp.bottomMargin = dp(10)
+            btn.layoutParams = lp
+            btn.setOnClickListener { seleccionarPestana(idx) }
+            iconosPestanas.add(btn)
+            barraLateral.addView(btn)
+        }
+
         val cab = LinearLayout(this)
         cab.orientation = LinearLayout.HORIZONTAL
         cab.gravity = Gravity.CENTER_VERTICAL
+        cab.setPadding(dp(4), dp(2), dp(2), dp(6))
+        habilitarArrastrePanel(cab)
+
         val titulo = TextView(this)
-        titulo.text = "◆ FERMXN CORE"
-        titulo.textSize = 16f
+        titulo.text = "☰ FERMXN PANEL"
+        titulo.textSize = 14f
         titulo.setTextColor(Color.WHITE)
         titulo.setTypeface(titulo.typeface, Typeface.BOLD)
         cab.addView(titulo, LinearLayout.LayoutParams(0, WRAP, 1f))
-        cab.addView(botonCuadro("▼", cian) { cerrarPanel() })
+        cab.addView(botonCuadro("⌖", Color.WHITE) { centrarPanel() })
+        cab.addView(botonCuadro("▼", Color.WHITE) { cerrarPanel() })
         cab.addView(botonCuadro("X", rojo) { stopSelf() })
 
-        // Chips: FPS, RAM, temperatura y ping
         chipFps = chip("-- FPS", verde)
         chipRam = chip("RAM --%", Color.WHITE)
         chipTemp = chip("--°C • --ms", Color.WHITE)
@@ -800,7 +964,6 @@ class FloatingService : Service() {
         filaChips.addView(chipTemp, lp3)
         filaChips.layoutParams = paramsFila()
 
-        // Modos
         val hzTxt = String.format(Locale.US, "%.0fHz", hzMaximo())
         val subs = listOf("60Hz", "Auto", hzTxt, "$hzTxt+")
         val filaModos = LinearLayout(this)
@@ -815,7 +978,6 @@ class FloatingService : Service() {
         filaModos.layoutParams = paramsFila()
         pintarModos(prefs.getInt("modo", 1).coerceIn(0, 3))
 
-        // Botones de la cuadrícula
         val tBoost = tile("🚀", "BOOST", "CLEAN") {
             segundoPlano {
                 Herramientas.limpiarRam()
@@ -940,10 +1102,9 @@ class FloatingService : Service() {
         }
         tileHealth = tile("🔋", "HEALTH", "--°C") { resumenBateria() }
 
-        // Ajustes de la mira (se abre con el botón MIRA)
         seccionMira = LinearLayout(this)
         seccionMira.orientation = LinearLayout.VERTICAL
-        seccionMira.visibility = View.GONE
+        seccionMira.visibility = View.VISIBLE
 
         val vDiseno = valorTexto(MiraView.NOMBRES[mira.diseno] + "  ⌄")
         seccionMira.addView(fila("Diseño", vDiseno) {
@@ -965,7 +1126,6 @@ class FloatingService : Service() {
             aplicarTamanoMira()
         })
 
-        // Ajustes de la bolita Macro (se abre al activar MACRO)
         seccionMacro = LinearLayout(this)
         seccionMacro.orientation = LinearLayout.VERTICAL
         seccionMacro.visibility = View.GONE
@@ -1003,32 +1163,85 @@ class FloatingService : Service() {
             aplicarEstiloBolitaMacro()
         })
 
-        // Contenido con scroll
+        tabModosHud = LinearLayout(this)
+        tabModosHud.orientation = LinearLayout.VERTICAL
+        tabModosHud.addView(subtituloSeccion("Rendimiento"))
+        tabModosHud.addView(filaChips)
+        tabModosHud.addView(filaModos)
+        tabModosHud.addView(subtituloSeccion("Pantalla"))
+        val checkHud = indicadorCheck(hudActivo)
+        tabModosHud.addView(fila("FPS HUD", checkHud) {
+            if (!Herramientas.listo()) {
+                aviso("Conectá Shizuku primero")
+            } else {
+                hudActivo = !hudActivo
+                if (hudActivo) wm.addView(hud, pHud) else wm.removeView(hud)
+                marcar(tileHud, hudActivo, if (hudActivo) "ON" else "OFF")
+                val nuevoCheck = indicadorCheck(hudActivo)
+                checkHud.text = nuevoCheck.text
+                checkHud.setTextColor(nuevoCheck.currentTextColor)
+                checkHud.background = nuevoCheck.background
+                asegurarLoop()
+            }
+        })
+
+        tabMira = LinearLayout(this)
+        tabMira.orientation = LinearLayout.VERTICAL
+        tabMira.addView(subtituloSeccion("Mira"))
+        tabMira.addView(filaTiles(tileGuide, tileMiraSet))
+        tabMira.addView(seccionMira, paramsFila())
+
+        tabMacro = LinearLayout(this)
+        tabMacro.orientation = LinearLayout.VERTICAL
+        tabMacro.addView(subtituloSeccion("Bolita Macro"))
+        tabMacro.addView(filaTiles(tileMacro, tileBolitaCtrl))
+        tabMacro.addView(seccionMacro, paramsFila())
+
+        tabOptimizar = LinearLayout(this)
+        tabOptimizar.orientation = LinearLayout.VERTICAL
+        tabOptimizar.addView(subtituloSeccion("Sistema"))
+        tabOptimizar.addView(filaTiles(tBoost, tCache, tileDnd))
+        tabOptimizar.addView(subtituloSeccion("Juego y Red"))
+        tabOptimizar.addView(filaTiles(tileTouch, tilePerfil, tilePing, tileHealth))
+
+        tabRapido = LinearLayout(this)
+        tabRapido.orientation = LinearLayout.VERTICAL
+        tabRapido.addView(subtituloSeccion("Acciones rápidas"))
+        tabRapido.addView(filaTiles(tShot, tMusic))
+        tabRapido.addView(fila("Centrar panel", valorTexto("⌖")) { centrarPanel() })
+        tabRapido.addView(fila("Minimizar panel", valorTexto("▼")) { cerrarPanel() })
+        tabRapido.addView(fila("Cerrar servicio", valorTexto("X")) { stopSelf() })
+
         val contenido = LinearLayout(this)
         contenido.orientation = LinearLayout.VERTICAL
-        contenido.addView(filaTiles(tBoost, tCache, tileDnd, tileHud, tShot, tMusic))
-        contenido.addView(filaTiles(tileGuide, tileMiraSet, tileMacro, tileBolitaCtrl, tileTouch, tilePerfil))
-        contenido.addView(filaTiles(tilePing, tileHealth))
-        contenido.addView(seccionMira, paramsFila())
-        contenido.addView(seccionMacro, paramsFila())
+        contenido.addView(tabModosHud)
+        contenido.addView(tabMira)
+        contenido.addView(tabMacro)
+        contenido.addView(tabOptimizar)
+        contenido.addView(tabRapido)
 
         val scroll = ScrollView(this)
         scroll.addView(contenido)
 
-        // Panel completo
+        val areaPrincipal = LinearLayout(this)
+        areaPrincipal.orientation = LinearLayout.VERTICAL
+        areaPrincipal.setPadding(dp(10), dp(4), dp(4), dp(4))
+        areaPrincipal.addView(cab, LinearLayout.LayoutParams(MATCH, WRAP))
+        areaPrincipal.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
+
         val raiz = LinearLayout(this)
-        raiz.orientation = LinearLayout.VERTICAL
-        raiz.setPadding(dp(10), dp(10), dp(10), dp(10))
+        raiz.orientation = LinearLayout.HORIZONTAL
+        raiz.setPadding(dp(8), dp(8), dp(8), dp(8))
         val fondoPanel = GradientDrawable()
-        fondoPanel.setColor(Color.parseColor("#F20A1326"))
-        fondoPanel.cornerRadius = dp(20).toFloat()
-        fondoPanel.setStroke(dp(2), cian)
+        fondoPanel.setColor(grisPanel)
+        fondoPanel.cornerRadius = dp(26).toFloat()
+        fondoPanel.setStroke(dp(1), bordeSuave)
         raiz.background = fondoPanel
-        raiz.addView(cab, LinearLayout.LayoutParams(MATCH, WRAP))
-        raiz.addView(filaChips)
-        raiz.addView(filaModos)
-        raiz.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        raiz.addView(barraLateral, LinearLayout.LayoutParams(WRAP, MATCH))
+        raiz.addView(areaPrincipal, LinearLayout.LayoutParams(0, MATCH, 1f))
         panel = raiz
+
+        seleccionarPestana(0)
 
         pPanel = WindowManager.LayoutParams(
             dp(360),
@@ -1037,7 +1250,7 @@ class FloatingService : Service() {
             banderas,
             PixelFormat.TRANSLUCENT
         )
-        pPanel.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        pPanel.gravity = Gravity.TOP or Gravity.START
     }
 
     private fun alternarPanel() {
@@ -1055,16 +1268,15 @@ class FloatingService : Service() {
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(dm)
 
-        pPanel.width = minOf(dp(620), (dm.widthPixels * 0.96).toInt())
-        pPanel.height = minOf(dp(330), (dm.heightPixels * 0.88).toInt())
-        pPanel.x = 0
-        pPanel.y = if (dm.heightPixels < dm.widthPixels) dp(6) else dp(40)
+        pPanel.width = minOf(dp(560), (dm.widthPixels * 0.92).toInt())
+        pPanel.height = minOf(dp(330), (dm.heightPixels * 0.84).toInt())
+        pPanel.x = prefs.getInt("panel_x", dp(68))
+        pPanel.y = prefs.getInt("panel_y", dp(40))
 
         wm.addView(panel, pPanel)
         panelAbierto = true
         asegurarLoop()
 
-        // La burbuja queda siempre por encima del panel
         ui.post {
             try {
                 wm.removeView(burbuja)
